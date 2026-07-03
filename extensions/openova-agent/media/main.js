@@ -17,6 +17,11 @@
 	let liveText = '';
 	let liveMsgId = null;
 	let queue = [];
+	let draft = '';
+	// window-mode navigation
+	let view = 'chat'; // 'chat' | 'automations'
+	let sidebarSearch = null; // null = closed, string = filter
+	let focusSearch = false;
 	// model picker state
 	let pickerOpen = false;
 	let pickerProvider = null;
@@ -42,6 +47,32 @@
 		if (text !== undefined) { n.textContent = text; }
 		return n;
 	}
+
+	const SVG_NS = 'http://www.w3.org/2000/svg';
+	function icon(d, size) {
+		const s = document.createElementNS(SVG_NS, 'svg');
+		s.setAttribute('viewBox', '0 0 16 16');
+		s.setAttribute('width', String(size || 14));
+		s.setAttribute('height', String(size || 14));
+		s.setAttribute('aria-hidden', 'true');
+		const p = document.createElementNS(SVG_NS, 'path');
+		p.setAttribute('d', d);
+		p.setAttribute('fill', 'currentColor');
+		s.appendChild(p);
+		return s;
+	}
+	const ICONS = {
+		spark: 'M8 0l1.9 6.1L16 8l-6.1 1.9L8 16l-1.9-6.1L0 8l6.1-1.9z',
+		search: 'M6.5 1a5.5 5.5 0 014.23 9.02l4.13 4.13-1.06 1.06-4.13-4.12A5.5 5.5 0 116.5 1zm0 1.5a4 4 0 100 8 4 4 0 000-8z',
+		clock: 'M8 1a7 7 0 110 14A7 7 0 018 1zm0 1.5a5.5 5.5 0 100 11 5.5 5.5 0 000-11zm.75 1.5v3.7l2.53 2.52-1.06 1.06L7.25 8.31V4h1.5z',
+		sliders: 'M1 3.5h9V5H1V3.5zm11.5 0H15V5h-2.5V3.5zM10 1.75h1.5v5H10v-5zM1 11h2.5v1.5H1V11zm5.5 0H15v1.5H6.5V11zM4 9.25h1.5v5H4v-5z',
+		folder: 'M1.5 3a1 1 0 011-1h3.6l1.3 1.5h6.1a1 1 0 011 1V12a1 1 0 01-1 1h-11a1 1 0 01-1-1V3zm1.5.5V11.5h10V5H6.7L5.4 3.5H3z',
+		up: 'M8 2.5l4.75 4.75-1.06 1.06-2.94-2.94V13.5h-1.5V5.37L4.31 8.31 3.25 7.25 8 2.5z',
+		stop: 'M4 4h8v8H4z',
+		external: 'M6 3h7v7h-1.5V5.56L4.53 12.53 3.47 11.47 10.44 4.5H6V3z',
+		chevron: 'M4.5 6l3.5 3.5L11.5 6l1 1-4.5 4.5L3.5 7l1-1z',
+		display: 'M1.5 3h13a.5.5 0 01.5.5V11a.5.5 0 01-.5.5H9v1h2V14H5v-1.5h2v-1H1.5A.5.5 0 011 11V3.5a.5.5 0 01.5-.5zm1 1.5V10h11V4.5h-11z'
+	};
 
 	// Minimal fenced-code renderer: text nodes + <pre> blocks, no innerHTML.
 	function renderBody(container, text) {
@@ -72,50 +103,354 @@
 		return parts[parts.length - 1] || p;
 	}
 
+	function age(ts) {
+		if (!ts) { return ''; }
+		const d = Date.now() - ts;
+		if (d < 3_600_000) { return Math.max(1, Math.round(d / 60_000)) + 'm'; }
+		if (d < 86_400_000) { return Math.round(d / 3_600_000) + 'h'; }
+		return Math.round(d / 86_400_000) + 'd';
+	}
+
+	// ---- shared composer ----
+	function buildComposer(big) {
+		const composer = el('div', 'composer' + (big ? ' home-composer' : ''));
+		renderChips(composer);
+		const ta = document.createElement('textarea');
+		ta.placeholder = running
+			? 'Running… (Enter queues a follow-up)'
+			: big
+				? 'Plan, build, or ask anything…  @ for context'
+				: 'Ask, or describe what to build…  @ attaches files';
+		ta.rows = big ? 2 : 1;
+		ta.value = draft;
+		ta.onkeydown = (e) => {
+			if (e.key === 'Enter' && !e.shiftKey) {
+				e.preventDefault();
+				submit(ta);
+			} else if (e.key === 'Tab' && e.shiftKey) {
+				e.preventDefault();
+				state.mode = state.mode === 'plan' ? 'agent' : 'plan';
+				vscode.setState(state);
+				render();
+			}
+		};
+		ta.oninput = () => {
+			draft = ta.value;
+			if (!big) {
+				ta.style.height = 'auto';
+				ta.style.height = Math.min(ta.scrollHeight, 140) + 'px';
+			}
+			onComposerInput(ta);
+		};
+		composer.appendChild(ta);
+
+		const bar = el('div', 'bar');
+		const attach = el('button', 'attach', '+');
+		attach.title = 'Attach files for context (@)';
+		attach.onclick = () => {
+			ta.value += (ta.value && !/\s$/.test(ta.value) ? ' ' : '') + '@';
+			draft = ta.value;
+			ta.focus();
+			onComposerInput(ta);
+		};
+		bar.appendChild(attach);
+
+		const mode = document.createElement('select');
+		mode.className = 'mode';
+		for (const [v, label] of [['agent', 'Agent'], ['ask', 'Ask'], ['plan', 'Plan']]) {
+			const o = document.createElement('option');
+			o.value = v;
+			o.textContent = label;
+			mode.appendChild(o);
+		}
+		mode.value = state.mode;
+		mode.onchange = () => {
+			state.mode = mode.value;
+			vscode.setState(state);
+		};
+		bar.appendChild(mode);
+
+		const model = el('button', 'model', settings.model || 'Auto');
+		model.title = 'Provider, model & effort';
+		model.onclick = () => {
+			pickerOpen = !pickerOpen;
+			if (pickerOpen) {
+				pickerProvider = settings.provider;
+				pickerModels = [];
+				pickerLoading = true;
+				vscode.postMessage({ type: 'listModels', provider: pickerProvider });
+			}
+			render();
+		};
+		bar.appendChild(model);
+		bar.appendChild(el('span', 'spacer'));
+
+		const send = el('button', 'send' + (running ? ' stop' : ''));
+		send.title = running ? 'Stop' : 'Send';
+		send.appendChild(icon(running ? ICONS.stop : ICONS.up, 13));
+		send.onclick = () => {
+			if (running) { vscode.postMessage({ type: 'abort', sessionId: active }); }
+			else { submit(ta); }
+		};
+		bar.appendChild(send);
+		composer.appendChild(bar);
+		if (pickerOpen) { composer.appendChild(renderPicker()); }
+		return { composer, ta };
+	}
+
 	// ---- rendering ----
 	function render() {
 		app.textContent = '';
-		const sess = sessions.find((s) => s.id === active);
-
-		// Agents-window home: hero + big composer + session cards, Cursor-style.
-		if (isWindow && (!sess || sess.messages.length === 0)) {
-			renderHome();
+		if (isWindow) {
+			renderWindow();
 			return;
 		}
+		renderSidebarMode();
+	}
 
-		// header
-		const head = el('div', 'head');
-		const logo = document.createElement('img');
-		logo.src = document.body.dataset.icon;
-		head.appendChild(logo);
-		head.appendChild(el('span', 'title', (sess && sess.title) || 'Openova Agent'));
-		const plus = el('button', '', '+');
-		plus.title = 'New chat';
-		plus.onclick = () => vscode.postMessage({ type: 'newSession' });
-		head.appendChild(plus);
-		app.appendChild(head);
+	// ============ agents-window shell: sidebar + main pane ============
+	function renderWindow() {
+		const shell = el('div', 'win-shell');
+		shell.appendChild(renderRail());
+		const main = el('div', 'win-main');
+		const sess = sessions.find((s) => s.id === active);
 
-		// session chips
-		const withMsgs = sessions.filter((s) => s.messages.length > 0 || s.id === active);
-		if (withMsgs.length > 1) {
-			const strip = el('div', 'sessions');
-			for (const s of withMsgs) {
-				const chip = el('span', 'chip' + (s.id === active ? ' active' : ''));
-				chip.appendChild(document.createTextNode(s.title || 'New Chat'));
-				// allow-any-unicode-next-line
-				const x = el('span', 'x', ' ✕');
-				x.onclick = (e) => {
-					e.stopPropagation();
-					vscode.postMessage({ type: 'deleteSession', id: s.id });
-				};
-				chip.appendChild(x);
-				chip.onclick = () => vscode.postMessage({ type: 'switchSession', id: s.id });
-				strip.appendChild(chip);
+		// slim top bar with a hop back to the editor window
+		const top = el('div', 'win-top');
+		top.appendChild(el('span', 'spacer'));
+		const ed = el('button', 'linkish');
+		ed.appendChild(document.createTextNode('Editor Window'));
+		ed.appendChild(icon(ICONS.external, 11));
+		ed.onclick = () => vscode.postMessage({ type: 'editorWindow' });
+		top.appendChild(ed);
+		main.appendChild(top);
+
+		if (view === 'automations') {
+			renderAutomations(main);
+		} else if (sess && sess.messages.length > 0) {
+			renderTranscript(main, sess, true);
+		} else {
+			renderHome(main);
+		}
+		shell.appendChild(main);
+		app.appendChild(shell);
+	}
+
+	function renderRail() {
+		const rail = el('div', 'rail');
+		const nav = el('div', 'rail-nav');
+		const item = (ic, label, onclick, isActive) => {
+			const b = el('button', 'rail-item' + (isActive ? ' active' : ''));
+			b.appendChild(icon(ic));
+			b.appendChild(el('span', '', label));
+			b.onclick = onclick;
+			nav.appendChild(b);
+			return b;
+		};
+		item(ICONS.spark, 'New Agent', () => {
+			view = 'chat';
+			pickerOpen = false;
+			vscode.postMessage({ type: 'newSession' });
+		}, view === 'chat' && !(sessions.find((s) => s.id === active)?.messages.length));
+		item(ICONS.search, 'Search', () => {
+			sidebarSearch = sidebarSearch === null ? '' : null;
+			focusSearch = sidebarSearch !== null;
+			render();
+		}, sidebarSearch !== null);
+		item(ICONS.clock, 'Automations', () => {
+			view = 'automations';
+			render();
+		}, view === 'automations');
+		item(ICONS.sliders, 'Customize', () => vscode.postMessage({ type: 'customize' }), false);
+		rail.appendChild(nav);
+
+		if (sidebarSearch !== null) {
+			const si = document.createElement('input');
+			si.className = 'rail-search';
+			si.placeholder = 'Search agents…';
+			si.value = sidebarSearch;
+			si.oninput = () => {
+				sidebarSearch = si.value;
+				renderRailSessions(rail);
+			};
+			si.onkeydown = (e) => {
+				if (e.key === 'Escape') {
+					sidebarSearch = null;
+					render();
+				}
+			};
+			rail.appendChild(si);
+			if (focusSearch) {
+				focusSearch = false;
+				setTimeout(() => si.focus(), 0);
 			}
-			app.appendChild(strip);
 		}
 
-		// transcript
+		rail.appendChild(el('div', 'rail-head', 'Repositories'));
+		const scroller = el('div', 'rail-scroll');
+		rail.appendChild(scroller);
+		renderRailSessions(rail);
+
+		const foot = el('div', 'rail-foot');
+		const gear = el('button', 'rail-gear');
+		gear.title = 'Openova settings';
+		// allow-any-unicode-next-line
+		gear.textContent = '⚙';
+		gear.onclick = () => vscode.postMessage({ type: 'openSettings' });
+		foot.appendChild(el('span', 'spacer'));
+		foot.appendChild(gear);
+		rail.appendChild(foot);
+		return rail;
+	}
+
+	function renderRailSessions(rail) {
+		const scroller = rail.querySelector('.rail-scroll');
+		scroller.textContent = '';
+		const repo = el('div', 'repo');
+		const rh = el('div', 'repo-name');
+		rh.appendChild(icon(ICONS.folder, 13));
+		rh.appendChild(el('span', '', workspace || 'No folder open'));
+		repo.appendChild(rh);
+		scroller.appendChild(repo);
+
+		const q = (sidebarSearch || '').toLowerCase();
+		const list = sessions.filter(
+			(s) => s.messages.length > 0 && (!q || (s.title || '').toLowerCase().includes(q))
+		);
+		if (!list.length) {
+			scroller.appendChild(el('div', 'rail-empty', q ? 'No matches' : 'No agents yet'));
+			return;
+		}
+		for (const s of list) {
+			const row = el('div', 'rail-sess' + (s.id === active && view === 'chat' ? ' active' : ''));
+			row.appendChild(el('span', 'rs-title', s.title || 'Agent'));
+			row.appendChild(el('span', 'rs-age', age(s.updatedAt)));
+			// allow-any-unicode-next-line
+			const x = el('button', 'rs-x', '✕');
+			x.title = 'Delete';
+			x.onclick = (e) => {
+				e.stopPropagation();
+				vscode.postMessage({ type: 'deleteSession', id: s.id });
+			};
+			row.appendChild(x);
+			row.onclick = () => {
+				view = 'chat';
+				vscode.postMessage({ type: 'switchSession', id: s.id });
+			};
+			scroller.appendChild(row);
+		}
+	}
+
+	function renderHome(main) {
+		const home = el('div', 'home');
+		const inner = el('div', 'home-inner');
+
+		// repo + machine row, Cursor-style
+		const where = el('div', 'where');
+		const repo = el('button', 'where-repo');
+		repo.appendChild(el('span', '', workspace || 'Open a folder'));
+		repo.appendChild(icon(ICONS.chevron, 11));
+		repo.title = 'Open a recent folder';
+		repo.onclick = () => vscode.postMessage({ type: 'openRepo' });
+		where.appendChild(repo);
+		const local = el('span', 'where-local');
+		local.appendChild(icon(ICONS.display, 12));
+		local.appendChild(el('span', '', 'Local'));
+		where.appendChild(local);
+		inner.appendChild(where);
+
+		const { composer, ta } = buildComposer(true);
+		inner.appendChild(composer);
+
+		// suggestion chips
+		const sugg = el('div', 'sugg');
+		const planChip = el('button', 'sugg-chip');
+		planChip.appendChild(el('span', '', 'Plan New Idea'));
+		// allow-any-unicode-next-line
+		planChip.appendChild(el('span', 'kbd', '⇧Tab'));
+		planChip.onclick = () => {
+			state.mode = 'plan';
+			vscode.setState(state);
+			render();
+		};
+		sugg.appendChild(planChip);
+		const buildChip = el('button', 'sugg-chip', 'Build');
+		buildChip.onclick = () => {
+			state.mode = 'agent';
+			vscode.setState(state);
+			render();
+		};
+		sugg.appendChild(buildChip);
+		inner.appendChild(sugg);
+
+		home.appendChild(inner);
+		const hint = el('div', 'home-hint');
+		hint.appendChild(document.createTextNode('Agents read and write workspace files and run gated commands. Use '));
+		hint.appendChild(el('span', 'kbd-pill', '@'));
+		hint.appendChild(document.createTextNode(' to attach files for context'));
+		home.appendChild(hint);
+		main.appendChild(home);
+		if (state.mode === 'plan') { planChip.classList.add('on'); }
+		if (!pickerOpen) { setTimeout(() => ta.focus(), 0); }
+	}
+
+	function renderAutomations(main) {
+		const pane = el('div', 'autom');
+		const box = el('div', 'autom-box');
+		const big = el('div', 'autom-icon');
+		big.appendChild(icon(ICONS.clock, 28));
+		box.appendChild(big);
+		box.appendChild(el('div', 'autom-title', 'Automations'));
+		box.appendChild(
+			el(
+				'div',
+				'autom-sub',
+				'Run agents on a schedule or in response to events — nightly test triage, dependency bumps, issue-to-PR runs. Coming soon.'
+			)
+		);
+		pane.appendChild(box);
+		main.appendChild(pane);
+	}
+
+	function renderTranscript(main, sess, windowed) {
+		// header (sidebar mode only — the window shell has its own rail)
+		if (!windowed) {
+			const head = el('div', 'head');
+			const logo = document.createElement('img');
+			logo.src = document.body.dataset.icon;
+			head.appendChild(logo);
+			head.appendChild(el('span', 'title', (sess && sess.title) || 'Openova Agent'));
+			const plus = el('button', '', '+');
+			plus.title = 'New chat';
+			plus.onclick = () => vscode.postMessage({ type: 'newSession' });
+			head.appendChild(plus);
+			main.appendChild(head);
+
+			const withMsgs = sessions.filter((s) => s.messages.length > 0 || s.id === active);
+			if (withMsgs.length > 1) {
+				const strip = el('div', 'sessions');
+				for (const s of withMsgs) {
+					const chip = el('span', 'chip' + (s.id === active ? ' active' : ''));
+					chip.appendChild(document.createTextNode(s.title || 'New Chat'));
+					// allow-any-unicode-next-line
+					const x = el('span', 'x', ' ✕');
+					x.onclick = (e) => {
+						e.stopPropagation();
+						vscode.postMessage({ type: 'deleteSession', id: s.id });
+					};
+					chip.appendChild(x);
+					chip.onclick = () => vscode.postMessage({ type: 'switchSession', id: s.id });
+					strip.appendChild(chip);
+				}
+				main.appendChild(strip);
+			}
+		} else {
+			const th = el('div', 'sess-head');
+			th.appendChild(el('span', 'sess-title', sess.title || 'Agent'));
+			th.appendChild(el('span', 'sess-age', age(sess.updatedAt)));
+			main.appendChild(th);
+		}
+
 		const msgs = el('div', 'msgs');
 		if (!sess || sess.messages.length === 0) {
 			const empty = el('div', 'empty');
@@ -146,8 +481,14 @@
 				box.appendChild(who);
 				if (m.steps && m.steps.length) {
 					const steps = el('div', 'steps');
-					for (const st of m.steps) {
-						steps.appendChild(renderStep(st));
+					// Collapse consecutive repeats of the same action into one row
+					// with a repeat count — agents often retry the same edit.
+					let si = 0;
+					while (si < m.steps.length) {
+						let sj = si + 1;
+						while (sj < m.steps.length && m.steps[sj].title === m.steps[si].title) { sj++; }
+						steps.appendChild(renderStep(m.steps[sj - 1], sj - si));
+						si = sj;
 					}
 					box.appendChild(steps);
 				}
@@ -168,9 +509,8 @@
 				msgs.appendChild(box);
 			}
 		}
-		app.appendChild(msgs);
+		main.appendChild(msgs);
 
-		// queued follow-ups
 		if (queue.length) {
 			const qwrap = el('div', 'queued');
 			for (const q of queue) {
@@ -183,159 +523,18 @@
 				chip.appendChild(x);
 				qwrap.appendChild(chip);
 			}
-			app.appendChild(qwrap);
+			main.appendChild(qwrap);
 		}
 
-		// composer
-		const composer = el('div', 'composer');
-		renderChips(composer);
-		const ta = document.createElement('textarea');
-		ta.placeholder = running
-			? 'Running… (Enter queues a follow-up)'
-			: 'Ask, or describe what to build…  @ attaches files';
-		ta.rows = 1;
-		ta.onkeydown = (e) => {
-			if (e.key === 'Enter' && !e.shiftKey) {
-				e.preventDefault();
-				submit(ta);
-			}
-		};
-		ta.oninput = () => {
-			ta.style.height = 'auto';
-			ta.style.height = Math.min(ta.scrollHeight, 140) + 'px';
-			onComposerInput(ta);
-		};
-		composer.appendChild(ta);
-
-		const bar = el('div', 'bar');
-		const mode = document.createElement('select');
-		for (const [v, label] of [['agent', 'Agent'], ['ask', 'Ask'], ['plan', 'Plan']]) {
-			const o = document.createElement('option');
-			o.value = v;
-			o.textContent = label;
-			mode.appendChild(o);
-		}
-		mode.value = state.mode;
-		mode.onchange = () => {
-			state.mode = mode.value;
-			vscode.setState(state);
-		};
-		bar.appendChild(mode);
-
-		const model = el('button', 'model', settings.model || 'model?');
-		model.title = 'Provider, model & effort';
-		model.onclick = () => {
-			pickerOpen = !pickerOpen;
-			if (pickerOpen) {
-				pickerProvider = settings.provider;
-				pickerModels = [];
-				pickerLoading = true;
-				vscode.postMessage({ type: 'listModels', provider: pickerProvider });
-			}
-			render();
-		};
-		bar.appendChild(model);
-
-		const send = el('button', 'send' + (running ? ' stop' : ''), running ? 'Stop' : 'Send');
-		send.onclick = () => {
-			if (running) { vscode.postMessage({ type: 'abort', sessionId: active }); }
-			else { submit(ta); }
-		};
-		bar.appendChild(send);
-		composer.appendChild(bar);
-		if (pickerOpen) { composer.appendChild(renderPicker()); }
-		app.appendChild(composer);
-
+		const { composer } = buildComposer(false);
+		main.appendChild(composer);
 		msgs.scrollTop = msgs.scrollHeight;
 	}
 
-	function renderHome() {
-		const home = el('div', 'home');
-		const hero = el('div', 'hero2');
-		const logo = document.createElement('img');
-		logo.src = document.body.dataset.icon;
-		hero.appendChild(logo);
-		hero.appendChild(el('div', 'wordmark', 'OPENOVA'));
-		hero.appendChild(
-			el('div', 'tagline', 'Plan, build, or ask anything' + (workspace ? ' in ' + workspace : ''))
-		);
-		home.appendChild(hero);
-
-		// big composer
-		const composer = el('div', 'composer home-composer');
-		renderChips(composer);
-		const ta = document.createElement('textarea');
-		ta.placeholder = running
-			? 'Running… (Enter queues a follow-up)'
-			: 'Describe what to build…  @ attaches files';
-		ta.rows = 2;
-		ta.onkeydown = (e) => {
-			if (e.key === 'Enter' && !e.shiftKey) {
-				e.preventDefault();
-				submit(ta);
-			}
-		};
-		ta.oninput = () => onComposerInput(ta);
-		composer.appendChild(ta);
-		const bar = el('div', 'bar');
-		const mode = document.createElement('select');
-		for (const [v, label] of [['agent', 'Agent'], ['ask', 'Ask'], ['plan', 'Plan']]) {
-			const o = document.createElement('option');
-			o.value = v;
-			o.textContent = label;
-			mode.appendChild(o);
-		}
-		mode.value = state.mode;
-		mode.onchange = () => {
-			state.mode = mode.value;
-			vscode.setState(state);
-		};
-		bar.appendChild(mode);
-		const model = el('button', 'model', settings.model || 'model?');
-		model.onclick = () => {
-			pickerOpen = !pickerOpen;
-			if (pickerOpen) {
-				pickerProvider = settings.provider;
-				pickerModels = [];
-				pickerLoading = true;
-				vscode.postMessage({ type: 'listModels', provider: pickerProvider });
-			}
-			render();
-		};
-		bar.appendChild(model);
-		const send = el('button', 'send' + (running ? ' stop' : ''), running ? 'Stop' : 'Send');
-		send.onclick = () => {
-			if (running) { vscode.postMessage({ type: 'abort', sessionId: active }); }
-			else { submit(ta); }
-		};
-		bar.appendChild(send);
-		composer.appendChild(bar);
-		if (pickerOpen) { composer.appendChild(renderPicker()); }
-		home.appendChild(composer);
-
-		// past agents
-		const withMsgs = sessions.filter((s) => s.messages.length > 0);
-		if (withMsgs.length) {
-			home.appendChild(el('div', 'grid-head', 'Agents'));
-			const grid = el('div', 'grid');
-			for (const s of withMsgs) {
-				const card = el('div', 'card');
-				card.appendChild(el('div', 'card-title', s.title || 'Agent'));
-				card.appendChild(el('div', 'card-sub', s.messages.length + ' messages'));
-				// allow-any-unicode-next-line
-				const x = el('button', 'card-x', '✕');
-				x.onclick = (e) => {
-					e.stopPropagation();
-					vscode.postMessage({ type: 'deleteSession', id: s.id });
-				};
-				card.appendChild(x);
-				card.onclick = () => vscode.postMessage({ type: 'switchSession', id: s.id });
-				grid.appendChild(card);
-			}
-			home.appendChild(grid);
-		}
-		app.appendChild(home);
-		ta.focus();
+	// ============ sidebar (view) mode — unchanged layout ============
+	function renderSidebarMode() {
+		const sess = sessions.find((s) => s.id === active);
+		renderTranscript(app, sess, false);
 	}
 
 	function renderPicker() {
@@ -483,13 +682,17 @@
 		return card;
 	}
 
-	function renderStep(st) {
+	function renderStep(st, count) {
 		const box = el('div', 'step ' + st.status + (st.kind === 'thought' ? ' thought' : ''));
 		const row = el('div', 'row');
 		const g = el('span', 'glyph');
 		g.appendChild(glyphFor(st));
 		row.appendChild(g);
 		row.appendChild(el('span', 't', st.title));
+		if (count > 1) {
+			// allow-any-unicode-next-line
+			row.appendChild(el('span', 'xn', '×' + count));
+		}
 		box.appendChild(row);
 		if (st.detail) {
 			const d = el('pre', 'detail');
@@ -507,6 +710,7 @@
 		const text = ta.value.trim();
 		if (!text) { return; }
 		ta.value = '';
+		draft = '';
 		const ctx = contextChips.slice();
 		contextChips = [];
 		mentionQuery = null;
@@ -543,6 +747,7 @@
 				e.preventDefault();
 				contextChips.push(f);
 				ta.value = ta.value.replace(/@[\w./\\-]*$/, '');
+				draft = ta.value;
 				mentionQuery = null;
 				render();
 			};

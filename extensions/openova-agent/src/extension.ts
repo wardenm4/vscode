@@ -64,6 +64,7 @@ interface Session {
 	id: string;
 	title: string;
 	messages: UiMessage[];
+	updatedAt?: number;
 }
 
 interface QueuedItem {
@@ -110,6 +111,12 @@ export function activate(context: vscode.ExtensionContext): void {
 		}),
 		vscode.commands.registerCommand('openova.openAgentsWindow', () => {
 			void provider.openAgentsWindow();
+		}),
+		// Restores the Agents window (incl. its floating OS window) across restarts.
+		vscode.window.registerWebviewPanelSerializer('openova.agents', {
+			deserializeWebviewPanel: async (panel) => {
+				provider.adoptPanel(panel);
+			}
 		}),
 		// Inline edit (Ctrl+I): rewrite the selection (or current line) per an
 		// instruction, streamed from the configured model, applied in place —
@@ -229,7 +236,7 @@ export function activate(context: vscode.ExtensionContext): void {
 					if (req.agentsWindow) {
 						await provider.openAgentsWindow();
 						trace('devAgentsWindow opened');
-						return;
+						if (!req.text) { return; }
 					}
 					if (req.completion) {
 						const doc = await vscode.workspace.openTextDocument(req.completion.file);
@@ -316,7 +323,7 @@ class OpenovaChatViewProvider implements vscode.WebviewViewProvider {
 			this.activeSession = existing.id;
 			return;
 		}
-		const s: Session = { id: uid(), title: 'New Chat', messages: [] };
+		const s: Session = { id: uid(), title: 'New Chat', messages: [], updatedAt: Date.now() };
 		this.sessions.unshift(s);
 		this.activeSession = s.id;
 	}
@@ -355,6 +362,23 @@ class OpenovaChatViewProvider implements vscode.WebviewViewProvider {
 		void this.panel?.webview.postMessage(msg);
 	}
 
+	/** Wire an Agents panel (fresh or deserialized after restart) to this provider. */
+	adoptPanel(panel: vscode.WebviewPanel): void {
+		panel.webview.options = {
+			enableScripts: true,
+			localResourceRoots: [vscode.Uri.joinPath(this.context.extensionUri, 'media')]
+		};
+		panel.iconPath = vscode.Uri.joinPath(this.context.extensionUri, 'media', 'nova.svg');
+		panel.webview.html = this.html(panel.webview, 'window');
+		panel.webview.onDidReceiveMessage((msg: Record<string, unknown>) => {
+			void this.onMessage(msg);
+		});
+		panel.onDidDispose(() => {
+			if (this.panel === panel) { this.panel = undefined; }
+		});
+		this.panel = panel;
+	}
+
 	/** Separate-OS-window mission control (Cursor-style) — same engine as the sidebar view. */
 	async openAgentsWindow(): Promise<void> {
 		if (this.panel) {
@@ -371,18 +395,19 @@ class OpenovaChatViewProvider implements vscode.WebviewViewProvider {
 				localResourceRoots: [vscode.Uri.joinPath(this.context.extensionUri, 'media')]
 			}
 		);
-		panel.iconPath = vscode.Uri.joinPath(this.context.extensionUri, 'media', 'nova.svg');
-		panel.webview.html = this.html(panel.webview, 'window');
-		panel.webview.onDidReceiveMessage((msg: Record<string, unknown>) => {
-			void this.onMessage(msg);
-		});
-		panel.onDidDispose(() => {
-			this.panel = undefined;
-		});
-		this.panel = panel;
+		this.adoptPanel(panel);
 		// Pop the panel out into its own OS window like Cursor's agent app.
-		// The panel is the active editor immediately after creation, so the
-		// move targets it; if the move fails we gracefully keep the tab.
+		// During startup another editor (e.g. Welcome) can win the active slot,
+		// and the move targets the ACTIVE editor — wait until it's really us.
+		if (!panel.active) {
+			await new Promise<void>((resolve) => {
+				const d = panel.onDidChangeViewState(() => {
+					if (panel.active) { d.dispose(); resolve(); }
+				});
+				setTimeout(() => { d.dispose(); resolve(); }, 1500);
+			});
+		}
+		panel.reveal(vscode.ViewColumn.One, false);
 		try {
 			await vscode.commands.executeCommand('workbench.action.moveEditorToNewWindow');
 		} catch {
@@ -514,6 +539,20 @@ class OpenovaChatViewProvider implements vscode.WebviewViewProvider {
 			}
 			case 'newSession':
 				this.newSession();
+				break;
+			case 'openSettings':
+				void vscode.commands.executeCommand('workbench.action.openSettings', '@ext:openova.openova-agent');
+				break;
+			case 'customize':
+				void vscode.commands.executeCommand('workbench.action.selectTheme');
+				break;
+			case 'openRepo':
+				void vscode.commands.executeCommand('workbench.action.openRecent');
+				break;
+			case 'editorWindow':
+				// The Agents surface lives in an aux window — cycle focus back to
+				// the main editor window.
+				void vscode.commands.executeCommand('workbench.action.focusNextWindow');
 				break;
 			case 'switchSession':
 				this.activeSession = String(msg.id);
@@ -819,6 +858,7 @@ class OpenovaChatViewProvider implements vscode.WebviewViewProvider {
 		const userMsg: UiMessage = { id: uid(), role: 'user', content: displayText };
 		const planMsg: UiMessage = { id: uid(), role: 'assistant', content: '' };
 		if (wasFirstTurn) { sess.title = displayText.slice(0, 40); }
+		sess.updatedAt = Date.now();
 		sess.messages.push(userMsg, planMsg);
 		this.postSessions();
 		this.post({ type: 'running', sessionId, running: true });
@@ -905,6 +945,7 @@ class OpenovaChatViewProvider implements vscode.WebviewViewProvider {
 		const userMsg: UiMessage = { id: uid(), role: 'user', content: displayText };
 		const reply: UiMessage = { id: uid(), role: 'assistant', content: '' };
 		if (wasFirstTurn) { sess.title = displayText.slice(0, 40); }
+		sess.updatedAt = Date.now();
 		sess.messages.push(userMsg, reply);
 		this.postSessions();
 		this.post({ type: 'running', sessionId, running: true });
@@ -970,6 +1011,7 @@ class OpenovaChatViewProvider implements vscode.WebviewViewProvider {
 		for (const m of sess.messages) {
 			if (m.writes?.length && !m.reviewDismissed) { m.reviewDismissed = true; }
 		}
+		sess.updatedAt = Date.now();
 		sess.messages.push(userMsg, agentMsg);
 		this.postSessions();
 		this.post({ type: 'running', sessionId, running: true });
