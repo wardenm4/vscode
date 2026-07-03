@@ -10,6 +10,7 @@
 // renders and sends user intents over a postMessage bridge.
 import * as vscode from 'vscode';
 import { runChat, complete, abortRequest, listModels } from './lib/ai';
+import { registerTabCompletions, completeAtPosition } from './completions';
 import { runAgent } from './lib/agent';
 import { providerInfo, PROVIDERS } from './lib/providers';
 import { lineDiff } from './lib/diff';
@@ -95,6 +96,7 @@ function trace(msg: string): void {
 export function activate(context: vscode.ExtensionContext): void {
 	trace('activate');
 	const provider = new OpenovaChatViewProvider(context);
+	registerTabCompletions(context);
 	context.subscriptions.push(
 		vscode.window.registerWebviewViewProvider('openova.chat', provider, {
 			webviewOptions: { retainContextWhenHidden: true }
@@ -217,10 +219,22 @@ export function activate(context: vscode.ExtensionContext): void {
 						mode?: string;
 						thenUndo?: boolean;
 						thenApprove?: boolean;
+						context?: string[];
 						inline?: { file: string; startLine: number; endLine: number; instruction: string };
+						completion?: { file: string; line: number; col: number };
 					};
 					fs.unlinkSync(triggerPath);
 					trace(`devTrigger ${JSON.stringify(req)}`);
+					if (req.completion) {
+						const doc = await vscode.workspace.openTextDocument(req.completion.file);
+						const text = await completeAtPosition(
+							doc,
+							new vscode.Position(req.completion.line - 1, req.completion.col),
+							'dev-completion'
+						);
+						trace(`devCompletion [${text.replace(/\n/g, '\\n').slice(0, 200)}]`);
+						return;
+					}
 					if (req.inline) {
 						const doc = await vscode.workspace.openTextDocument(req.inline.file);
 						const editor = await vscode.window.showTextDocument(doc);
@@ -237,7 +251,7 @@ export function activate(context: vscode.ExtensionContext): void {
 					}
 					if (!req.text) { return; }
 					const mode = req.mode === 'ask' ? 'ask' : req.mode === 'plan' ? 'plan' : 'agent';
-					await provider.startRun(req.text, mode);
+					await provider.startRun(req.text, mode, req.context ?? []);
 					if (req.thenApprove) {
 						const ok = await provider.approveLastPlan();
 						trace(`devApprove ran=${ok}`);
@@ -391,13 +405,42 @@ class OpenovaChatViewProvider implements vscode.WebviewViewProvider {
 	}
 
 	/** Programmatic entry point (URI handler / commands / dev harness). */
-	async startRun(text: string, mode: 'ask' | 'agent' | 'plan'): Promise<void> {
+	async startRun(
+		text: string,
+		mode: 'ask' | 'agent' | 'plan',
+		contextPaths: string[] = []
+	): Promise<void> {
 		const sessionId = this.activeSession;
 		trace(`startRun mode=${mode} session=${sessionId} busy=${!!(sessionId && this.runs.get(sessionId))}`);
 		if (!sessionId || this.runs.get(sessionId)) { return; }
-		if (mode === 'agent') { await this.sendAgent(sessionId, text); }
-		else if (mode === 'plan') { await this.sendPlan(sessionId, text); }
-		else { await this.sendAsk(sessionId, text); }
+		await this.dispatch(sessionId, text, mode, contextPaths);
+	}
+
+	/** Resolve @-mentioned files into a context block, then route by mode. */
+	private async dispatch(
+		sessionId: string,
+		text: string,
+		mode: 'ask' | 'agent' | 'plan',
+		contextPaths: string[]
+	): Promise<void> {
+		let contextBlock = '';
+		const root = vscode.workspace.workspaceFolders?.[0]?.uri;
+		if (root && contextPaths.length) {
+			for (const rel of contextPaths.slice(0, 8)) {
+				try {
+					const uri = vscode.Uri.joinPath(root, rel);
+					const bytes = await vscode.workspace.fs.readFile(uri);
+					if (bytes.byteLength > 24_576) { continue; }
+					contextBlock += `\n\nAttached file ${rel}:\n\`\`\`\n${new TextDecoder().decode(bytes)}\n\`\`\``;
+				} catch {
+					/* skip unreadable */
+				}
+			}
+		}
+		const full = contextBlock ? `${text}${contextBlock}` : text;
+		if (mode === 'agent') { await this.sendAgent(sessionId, full, contextBlock ? { displayText: text } : {}); }
+		else if (mode === 'plan') { await this.sendPlan(sessionId, full, text); }
+		else { await this.sendAsk(sessionId, full, text); }
 	}
 
 	/** Dev harness: approve the most recent proposed plan and await the run. */
@@ -479,6 +522,7 @@ class OpenovaChatViewProvider implements vscode.WebviewViewProvider {
 				const sessionId = String(msg.sessionId ?? this.activeSession ?? '');
 				const text = String(msg.text ?? '').trim();
 				const mode = msg.mode === 'ask' ? 'ask' : msg.mode === 'plan' ? 'plan' : 'agent';
+				const contextPaths = Array.isArray(msg.context) ? (msg.context as string[]) : [];
 				if (!text || !this.session(sessionId)) { return; }
 				if (this.runs.get(sessionId)) {
 					// A run is streaming — queue the follow-up (dispatched at run end).
@@ -488,9 +532,22 @@ class OpenovaChatViewProvider implements vscode.WebviewViewProvider {
 					this.postQueue(sessionId);
 					return;
 				}
-				if (mode === 'agent') { await this.sendAgent(sessionId, text); }
-				else if (mode === 'plan') { await this.sendPlan(sessionId, text); }
-				else { await this.sendAsk(sessionId, text); }
+				await this.dispatch(sessionId, text, mode, contextPaths);
+				break;
+			}
+			case 'listWorkspaceFiles': {
+				const uris = await vscode.workspace.findFiles(
+					'**/*',
+					'{**/node_modules/**,**/.git/**,**/out/**,**/dist/**,**/build/**}',
+					400
+				);
+				const root = vscode.workspace.workspaceFolders?.[0]?.uri.fsPath ?? '';
+				this.post({
+					type: 'workspaceFiles',
+					files: root
+						? uris.map((u) => vscode.workspace.asRelativePath(u, false).replace(/\\/g, '/')).sort()
+						: []
+				});
 				break;
 			}
 			case 'planEdit':
@@ -742,12 +799,12 @@ class OpenovaChatViewProvider implements vscode.WebviewViewProvider {
 	}
 
 	/** Draft an editable step-by-step plan (approve to execute). */
-	private async sendPlan(sessionId: string, text: string): Promise<void> {
+	private async sendPlan(sessionId: string, text: string, displayText = text): Promise<void> {
 		const sess = this.session(sessionId)!;
 		const wasFirstTurn = sess.messages.length === 0;
-		const userMsg: UiMessage = { id: uid(), role: 'user', content: text };
+		const userMsg: UiMessage = { id: uid(), role: 'user', content: displayText };
 		const planMsg: UiMessage = { id: uid(), role: 'assistant', content: '' };
-		if (wasFirstTurn) { sess.title = text.slice(0, 40); }
+		if (wasFirstTurn) { sess.title = displayText.slice(0, 40); }
 		sess.messages.push(userMsg, planMsg);
 		this.postSessions();
 		this.post({ type: 'running', sessionId, running: true });
@@ -828,12 +885,12 @@ class OpenovaChatViewProvider implements vscode.WebviewViewProvider {
 
 	// ---- ask mode -----------------------------------------------------------
 
-	private async sendAsk(sessionId: string, text: string): Promise<void> {
+	private async sendAsk(sessionId: string, text: string, displayText = text): Promise<void> {
 		const sess = this.session(sessionId)!;
 		const wasFirstTurn = sess.messages.length === 0;
-		const userMsg: UiMessage = { id: uid(), role: 'user', content: text };
+		const userMsg: UiMessage = { id: uid(), role: 'user', content: displayText };
 		const reply: UiMessage = { id: uid(), role: 'assistant', content: '' };
-		if (wasFirstTurn) { sess.title = text.slice(0, 40); }
+		if (wasFirstTurn) { sess.title = displayText.slice(0, 40); }
 		sess.messages.push(userMsg, reply);
 		this.postSessions();
 		this.post({ type: 'running', sessionId, running: true });
@@ -841,9 +898,11 @@ class OpenovaChatViewProvider implements vscode.WebviewViewProvider {
 		const run: RunState = { stop: false, requestId: uid() };
 		this.runs.set(sessionId, run);
 		const s = this.settings();
+		// The transcript shows the typed text; the model gets it WITH the
+		// attached-file context block for this turn.
 		const history = sess.messages
 			.filter((m) => m.id !== reply.id && !m.steps)
-			.map((m) => ({ role: m.role, content: m.content }));
+			.map((m) => ({ role: m.role, content: m.id === userMsg.id ? text : m.content }));
 		try {
 			let out = '';
 			await runChat({

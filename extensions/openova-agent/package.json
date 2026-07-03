@@ -134,6 +134,11 @@
           "default": "",
           "description": "Optional command (typecheck/lint/test) the agent must pass before finishing."
         },
+        "openova.tabCompletion": {
+          "type": "boolean",
+          "default": true,
+          "description": "Ghost-text tab completions from the configured model (Tab to accept)."
+        },
         "openova.mcpServers": {
           "type": "array",
           "default": [],

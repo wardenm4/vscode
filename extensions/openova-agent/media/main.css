@@ -232,11 +232,57 @@ body {
 
 /* composer */
 .composer {
+	position: relative;
 	border-top: 1px solid var(--vscode-panel-border);
 	padding: 8px;
 	display: flex;
 	flex-direction: column;
 	gap: 6px;
+}
+.mention {
+	position: absolute;
+	bottom: calc(100% + 4px);
+	left: 8px;
+	right: 8px;
+	background: var(--vscode-dropdown-background);
+	border: 1px solid var(--vscode-panel-border);
+	border-radius: 6px;
+	overflow: hidden;
+	z-index: 10;
+	box-shadow: 0 4px 16px rgba(0, 0, 0, 0.35);
+}
+.mention .mrow {
+	padding: 5px 9px;
+	font-size: 12px;
+	cursor: pointer;
+	overflow: hidden;
+	text-overflow: ellipsis;
+	white-space: nowrap;
+}
+.mention .mrow:hover {
+	background: var(--vscode-list-hoverBackground);
+}
+.chips {
+	display: flex;
+	flex-wrap: wrap;
+	gap: 4px;
+}
+.ctx-chip {
+	display: inline-flex;
+	align-items: center;
+	gap: 4px;
+	border: 1px solid var(--vscode-input-border, #555);
+	border-radius: 6px;
+	padding: 1px 7px;
+	font-size: 11px;
+	color: var(--vscode-descriptionForeground);
+}
+.ctx-chip .x {
+	cursor: pointer;
+	opacity: 0.6;
+}
+.ctx-chip .x:hover {
+	opacity: 1;
 }
 .composer textarea {
 	width: 100%;

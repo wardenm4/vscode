@@ -22,6 +22,10 @@
 	let pickerProvider = null;
 	let pickerModels = [];
 	let pickerLoading = false;
+	// @-mention state
+	let contextChips = [];
+	let wsFiles = null;
+	let mentionQuery = null;
 
 	const EFFORTS = [
 		['off', 'Auto'],
@@ -184,8 +188,11 @@
 
 		// composer
 		const composer = el('div', 'composer');
+		renderChips(composer);
 		const ta = document.createElement('textarea');
-		ta.placeholder = running ? 'Running… (Enter queues a follow-up)' : 'Ask, or describe what to build…';
+		ta.placeholder = running
+			? 'Running… (Enter queues a follow-up)'
+			: 'Ask, or describe what to build…  @ attaches files';
 		ta.rows = 1;
 		ta.onkeydown = (e) => {
 			if (e.key === 'Enter' && !e.shiftKey) {
@@ -196,6 +203,7 @@
 		ta.oninput = () => {
 			ta.style.height = 'auto';
 			ta.style.height = Math.min(ta.scrollHeight, 140) + 'px';
+			onComposerInput(ta);
 		};
 		composer.appendChild(ta);
 
@@ -255,8 +263,11 @@
 
 		// big composer
 		const composer = el('div', 'composer home-composer');
+		renderChips(composer);
 		const ta = document.createElement('textarea');
-		ta.placeholder = running ? 'Running… (Enter queues a follow-up)' : 'Describe what to build…';
+		ta.placeholder = running
+			? 'Running… (Enter queues a follow-up)'
+			: 'Describe what to build…  @ attaches files';
 		ta.rows = 2;
 		ta.onkeydown = (e) => {
 			if (e.key === 'Enter' && !e.shiftKey) {
@@ -264,6 +275,7 @@
 				submit(ta);
 			}
 		};
+		ta.oninput = () => onComposerInput(ta);
 		composer.appendChild(ta);
 		const bar = el('div', 'bar');
 		const mode = document.createElement('select');
@@ -495,7 +507,66 @@
 		const text = ta.value.trim();
 		if (!text) { return; }
 		ta.value = '';
-		vscode.postMessage({ type: 'send', sessionId: active, text, mode: state.mode });
+		const ctx = contextChips.slice();
+		contextChips = [];
+		mentionQuery = null;
+		vscode.postMessage({ type: 'send', sessionId: active, text, mode: state.mode, context: ctx });
+	}
+
+	// ---- @-mentions ----
+	function onComposerInput(ta) {
+		const m = /@([\w./\\-]*)$/.exec(ta.value);
+		const q = m ? m[1] : null;
+		if (q !== null && wsFiles === null) {
+			wsFiles = [];
+			vscode.postMessage({ type: 'listWorkspaceFiles' });
+		}
+		if (q !== mentionQuery) {
+			mentionQuery = q;
+			renderMention(ta);
+		}
+	}
+
+	function renderMention(ta) {
+		const old = document.querySelector('.mention');
+		if (old) { old.remove(); }
+		if (mentionQuery === null || !wsFiles) { return; }
+		const q = mentionQuery.toLowerCase();
+		const matches = wsFiles
+			.filter((f) => !contextChips.includes(f) && f.toLowerCase().includes(q))
+			.slice(0, 8);
+		if (!matches.length) { return; }
+		const box = el('div', 'mention');
+		for (const f of matches) {
+			const row = el('div', 'mrow', f);
+			row.onmousedown = (e) => {
+				e.preventDefault();
+				contextChips.push(f);
+				ta.value = ta.value.replace(/@[\w./\\-]*$/, '');
+				mentionQuery = null;
+				render();
+			};
+			box.appendChild(row);
+		}
+		ta.closest('.composer').appendChild(box);
+	}
+
+	function renderChips(composer) {
+		if (!contextChips.length) { return; }
+		const row = el('div', 'chips');
+		for (const c of contextChips) {
+			const chip = el('span', 'ctx-chip', '@' + (c.split('/').pop() || c));
+			chip.title = c;
+			// allow-any-unicode-next-line
+			const x = el('span', 'x', ' ✕');
+			x.onclick = () => {
+				contextChips = contextChips.filter((p) => p !== c);
+				render();
+			};
+			chip.appendChild(x);
+			row.appendChild(chip);
+		}
+		composer.appendChild(row);
 	}
 
 	// ---- state + host messages ----
@@ -533,6 +604,12 @@
 				}
 				render();
 				break;
+			case 'workspaceFiles': {
+				wsFiles = m.files || [];
+				const ta = document.querySelector('.composer textarea');
+				if (ta) { renderMention(ta); }
+				break;
+			}
 			case 'running':
 				running = m.running;
 				if (!m.running) { liveText = ''; liveMsgId = null; }
