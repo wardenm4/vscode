@@ -1,0 +1,37 @@
+{
+  "name": "openova-themes",
+  "displayName": "Openova Themes",
+  "description": "Openova's bundled look and feel - nova-accented dark, midnight, and light themes.",
+  "version": "1.0.0",
+  "publisher": "openova",
+  "license": "MIT",
+  "engines": {
+    "vscode": "^1.128.0"
+  },
+  "categories": [
+    "Themes"
+  ],
+  "contributes": {
+    "themes": [
+      {
+        "label": "Openova Dark",
+        "uiTheme": "vs-dark",
+        "path": "./themes/openova-dark.json"
+      },
+      {
+        "label": "Openova Midnight",
+        "uiTheme": "vs-dark",
+        "path": "./themes/openova-midnight.json"
+      },
+      {
+        "label": "Openova Light",
+        "uiTheme": "vs",
+        "path": "./themes/openova-light.json"
+      }
+    ]
+  },
+  "repository": {
+    "type": "git",
+    "url": "https://github.com/wardenm4/vscode.git"
+  }
+}

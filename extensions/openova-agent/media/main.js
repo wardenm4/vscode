@@ -6,6 +6,7 @@
 (function () {
 	const vscode = acquireVsCodeApi();
 	const app = document.getElementById('app');
+	const isWindow = document.body.dataset.mode === 'window';
 
 	let sessions = [];
 	let active = null;
@@ -71,6 +72,12 @@
 	function render() {
 		app.textContent = '';
 		const sess = sessions.find((s) => s.id === active);
+
+		// Agents-window home: hero + big composer + session cards, Cursor-style.
+		if (isWindow && (!sess || sess.messages.length === 0)) {
+			renderHome();
+			return;
+		}
 
 		// header
 		const head = el('div', 'head');
@@ -216,6 +223,91 @@
 		app.appendChild(composer);
 
 		msgs.scrollTop = msgs.scrollHeight;
+	}
+
+	function renderHome() {
+		const home = el('div', 'home');
+		const hero = el('div', 'hero2');
+		const logo = document.createElement('img');
+		logo.src = document.body.dataset.icon;
+		hero.appendChild(logo);
+		hero.appendChild(el('div', 'wordmark', 'OPENOVA'));
+		hero.appendChild(
+			el('div', 'tagline', 'Plan, build, or ask anything' + (workspace ? ' in ' + workspace : ''))
+		);
+		home.appendChild(hero);
+
+		// big composer
+		const composer = el('div', 'composer home-composer');
+		const ta = document.createElement('textarea');
+		ta.placeholder = running ? 'Running… (Enter queues a follow-up)' : 'Describe what to build…';
+		ta.rows = 2;
+		ta.onkeydown = (e) => {
+			if (e.key === 'Enter' && !e.shiftKey) {
+				e.preventDefault();
+				submit(ta);
+			}
+		};
+		composer.appendChild(ta);
+		const bar = el('div', 'bar');
+		const mode = document.createElement('select');
+		for (const [v, label] of [['agent', 'Agent'], ['ask', 'Ask'], ['plan', 'Plan']]) {
+			const o = document.createElement('option');
+			o.value = v;
+			o.textContent = label;
+			mode.appendChild(o);
+		}
+		mode.value = state.mode;
+		mode.onchange = () => {
+			state.mode = mode.value;
+			vscode.setState(state);
+		};
+		bar.appendChild(mode);
+		const model = el('button', 'model', settings.model || 'model?');
+		model.onclick = () => {
+			pickerOpen = !pickerOpen;
+			if (pickerOpen) {
+				pickerProvider = settings.provider;
+				pickerModels = [];
+				pickerLoading = true;
+				vscode.postMessage({ type: 'listModels', provider: pickerProvider });
+			}
+			render();
+		};
+		bar.appendChild(model);
+		const send = el('button', 'send' + (running ? ' stop' : ''), running ? 'Stop' : 'Send');
+		send.onclick = () => {
+			if (running) { vscode.postMessage({ type: 'abort', sessionId: active }); }
+			else { submit(ta); }
+		};
+		bar.appendChild(send);
+		composer.appendChild(bar);
+		if (pickerOpen) { composer.appendChild(renderPicker()); }
+		home.appendChild(composer);
+
+		// past agents
+		const withMsgs = sessions.filter((s) => s.messages.length > 0);
+		if (withMsgs.length) {
+			home.appendChild(el('div', 'grid-head', 'Agents'));
+			const grid = el('div', 'grid');
+			for (const s of withMsgs) {
+				const card = el('div', 'card');
+				card.appendChild(el('div', 'card-title', s.title || 'Agent'));
+				card.appendChild(el('div', 'card-sub', s.messages.length + ' messages'));
+				// allow-any-unicode-next-line
+				const x = el('button', 'card-x', '✕');
+				x.onclick = (e) => {
+					e.stopPropagation();
+					vscode.postMessage({ type: 'deleteSession', id: s.id });
+				};
+				card.appendChild(x);
+				card.onclick = () => vscode.postMessage({ type: 'switchSession', id: s.id });
+				grid.appendChild(card);
+			}
+			home.appendChild(grid);
+		}
+		app.appendChild(home);
+		ta.focus();
 	}
 
 	function renderPicker() {

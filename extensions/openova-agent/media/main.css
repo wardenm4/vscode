@@ -611,6 +611,118 @@ body {
 	opacity: 0.5;
 }
 
+/* agents window (full-tab) */
+body[data-mode='window'] .msgs,
+body[data-mode='window'] .composer,
+body[data-mode='window'] .sessions,
+body[data-mode='window'] .queued {
+	max-width: 780px;
+	width: 100%;
+	margin-left: auto;
+	margin-right: auto;
+	box-sizing: border-box;
+}
+.home {
+	flex: 1;
+	overflow-y: auto;
+	display: flex;
+	flex-direction: column;
+	align-items: center;
+	padding: 9vh 24px 24px;
+}
+.hero2 {
+	display: flex;
+	flex-direction: column;
+	align-items: center;
+	gap: 10px;
+	margin-bottom: 26px;
+}
+.hero2 img {
+	width: 64px;
+	height: 64px;
+}
+.wordmark {
+	font-size: 22px;
+	font-weight: 700;
+	letter-spacing: 7px;
+}
+.tagline {
+	color: var(--vscode-descriptionForeground);
+	font-size: 12.5px;
+}
+.home-composer {
+	width: 100%;
+	max-width: 640px;
+	border: 1px solid var(--vscode-input-border, #444);
+	border-radius: 10px;
+	padding: 10px;
+	background: var(--vscode-input-background);
+}
+.home-composer textarea {
+	border: none;
+	background: transparent;
+	min-height: 52px;
+}
+.home-composer textarea:focus {
+	border: none;
+}
+.grid-head {
+	width: 100%;
+	max-width: 640px;
+	margin-top: 30px;
+	font-size: 10.5px;
+	font-weight: 700;
+	text-transform: uppercase;
+	letter-spacing: 0.6px;
+	color: var(--vscode-descriptionForeground);
+	padding-bottom: 6px;
+}
+.grid {
+	width: 100%;
+	max-width: 640px;
+	display: grid;
+	grid-template-columns: repeat(auto-fill, minmax(190px, 1fr));
+	gap: 8px;
+}
+.card {
+	position: relative;
+	border: 1px solid var(--vscode-panel-border);
+	border-radius: 8px;
+	padding: 10px 12px;
+	cursor: pointer;
+}
+.card:hover {
+	background: var(--vscode-list-hoverBackground);
+	border-color: var(--vscode-focusBorder);
+}
+.card-title {
+	font-size: 12.5px;
+	font-weight: 600;
+	overflow: hidden;
+	text-overflow: ellipsis;
+	white-space: nowrap;
+	padding-right: 16px;
+}
+.card-sub {
+	font-size: 11px;
+	color: var(--vscode-descriptionForeground);
+	margin-top: 3px;
+}
+.card-x {
+	position: absolute;
+	top: 7px;
+	right: 7px;
+	border: none;
+	background: transparent;
+	color: var(--vscode-descriptionForeground);
+	cursor: pointer;
+	font-size: 10px;
+	opacity: 0;
+}
+.card:hover .card-x {
+	opacity: 0.8;
+}
+
 /* queued follow-ups */
 .queued {
 	display: flex;

@@ -106,6 +106,9 @@ export function activate(context: vscode.ExtensionContext): void {
 			void vscode.commands.executeCommand('openova.chat.focus');
 			provider.newSession();
 		}),
+		vscode.commands.registerCommand('openova.openAgentsWindow', () => {
+			provider.openAgentsWindow();
+		}),
 		// Deep link: openova://openova.openova-agent/run?mode=agent&text=…
 		vscode.window.registerUriHandler({
 			handleUri(uri: vscode.Uri): void {
@@ -165,6 +168,7 @@ export function deactivate(): void {
 
 class OpenovaChatViewProvider implements vscode.WebviewViewProvider {
 	private view: vscode.WebviewView | undefined;
+	private panel: vscode.WebviewPanel | undefined;
 	private sessions: Session[] = [];
 	private activeSession: string | null = null;
 	private readonly runs = new Map<string, RunState>();
@@ -232,7 +236,36 @@ class OpenovaChatViewProvider implements vscode.WebviewViewProvider {
 	}
 
 	private post(msg: Record<string, unknown>): void {
+		// Both surfaces (sidebar view + Agents window panel) mirror the state.
 		void this.view?.webview.postMessage(msg);
+		void this.panel?.webview.postMessage(msg);
+	}
+
+	/** Full-tab mission-control surface — same engine as the sidebar view. */
+	openAgentsWindow(): void {
+		if (this.panel) {
+			this.panel.reveal();
+			return;
+		}
+		const panel = vscode.window.createWebviewPanel(
+			'openova.agents',
+			'Openova Agents',
+			vscode.ViewColumn.One,
+			{
+				enableScripts: true,
+				retainContextWhenHidden: true,
+				localResourceRoots: [vscode.Uri.joinPath(this.context.extensionUri, 'media')]
+			}
+		);
+		panel.iconPath = vscode.Uri.joinPath(this.context.extensionUri, 'media', 'nova.svg');
+		panel.webview.html = this.html(panel.webview, 'window');
+		panel.webview.onDidReceiveMessage((msg: Record<string, unknown>) => {
+			void this.onMessage(msg);
+		});
+		panel.onDidDispose(() => {
+			this.panel = undefined;
+		});
+		this.panel = panel;
 	}
 
 	private postSessions(): void {
@@ -937,7 +970,7 @@ class OpenovaChatViewProvider implements vscode.WebviewViewProvider {
 
 	// ---- shell --------------------------------------------------------------
 
-	private html(webview: vscode.Webview): string {
+	private html(webview: vscode.Webview, mode: 'sidebar' | 'window' = 'sidebar'): string {
 		const nonce = uid() + uid();
 		const css = webview.asWebviewUri(vscode.Uri.joinPath(this.context.extensionUri, 'media', 'main.css'));
 		const js = webview.asWebviewUri(vscode.Uri.joinPath(this.context.extensionUri, 'media', 'main.js'));
@@ -950,7 +983,7 @@ class OpenovaChatViewProvider implements vscode.WebviewViewProvider {
 		content="default-src 'none'; img-src ${webview.cspSource}; style-src ${webview.cspSource}; script-src 'nonce-${nonce}';">
 	<link rel="stylesheet" href="${css}">
 </head>
-<body data-icon="${icon}">
+<body data-icon="${icon}" data-mode="${mode}">
 	<div id="app"></div>
 	<script nonce="${nonce}" src="${js}"></script>
 </body>

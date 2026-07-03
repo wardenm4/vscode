@@ -1,0 +1,104 @@
+{
+	"$schema": "vscode://schemas/color-theme",
+	"name": "Openova Light",
+	"type": "light",
+	"semanticHighlighting": true,
+	"colors": {
+		"focusBorder": "#6a5ae0",
+		"selection.background": "#6a5ae033",
+		"activityBar.background": "#f4f3f8",
+		"activityBar.foreground": "#3d3a52",
+		"activityBar.inactiveForeground": "#9b98ad",
+		"activityBar.activeBorder": "#6a5ae0",
+		"activityBarBadge.background": "#6a5ae0",
+		"activityBarBadge.foreground": "#ffffff",
+		"sideBar.background": "#f8f7fb",
+		"sideBar.foreground": "#44415c",
+		"editor.background": "#ffffff",
+		"editor.foreground": "#2d2a41",
+		"editor.lineHighlightBackground": "#f2f0fa",
+		"editor.selectionBackground": "#6a5ae026",
+		"editorCursor.foreground": "#6a5ae0",
+		"editorLineNumber.foreground": "#b6b3c8",
+		"editorLineNumber.activeForeground": "#6a5ae0",
+		"editorGroupHeader.tabsBackground": "#f4f3f8",
+		"tab.activeBackground": "#ffffff",
+		"tab.inactiveBackground": "#f4f3f8",
+		"tab.activeBorderTop": "#6a5ae0",
+		"titleBar.activeBackground": "#f4f3f8",
+		"titleBar.activeForeground": "#44415c",
+		"statusBar.background": "#f4f3f8",
+		"statusBar.foreground": "#6f6c86",
+		"statusBar.noFolderBackground": "#f4f3f8",
+		"button.background": "#6a5ae0",
+		"button.foreground": "#ffffff",
+		"button.hoverBackground": "#7b6cf0",
+		"badge.background": "#6a5ae0",
+		"badge.foreground": "#ffffff",
+		"progressBar.background": "#6a5ae0",
+		"input.background": "#ffffff",
+		"input.border": "#dbd8ea",
+		"dropdown.background": "#ffffff",
+		"list.activeSelectionBackground": "#e8e4fa",
+		"list.activeSelectionForeground": "#2d2a41",
+		"list.hoverBackground": "#f2f0fa",
+		"list.highlightForeground": "#6a5ae0",
+		"panel.background": "#f8f7fb",
+		"panelTitle.activeBorder": "#6a5ae0",
+		"terminal.background": "#ffffff",
+		"quickInput.background": "#ffffff",
+		"pickerGroup.foreground": "#6a5ae0",
+		"textLink.foreground": "#5a48d8",
+		"textLink.activeForeground": "#6a5ae0",
+		"editorWidget.background": "#ffffff",
+		"scrollbarSlider.background": "#6a5ae01f",
+		"scrollbarSlider.hoverBackground": "#6a5ae033",
+		"scrollbarSlider.activeBackground": "#6a5ae04d"
+	},
+	"tokenColors": [
+		{
+			"scope": ["comment", "punctuation.definition.comment"],
+			"settings": { "foreground": "#9b98ad", "fontStyle": "italic" }
+		},
+		{
+			"scope": ["string", "string.quoted"],
+			"settings": { "foreground": "#2f8a4c" }
+		},
+		{
+			"scope": ["constant.numeric", "constant.language", "constant.character"],
+			"settings": { "foreground": "#b06a17" }
+		},
+		{
+			"scope": ["keyword", "storage.type", "storage.modifier", "keyword.control"],
+			"settings": { "foreground": "#5a48d8" }
+		},
+		{
+			"scope": ["entity.name.function", "support.function"],
+			"settings": { "foreground": "#2a63c8" }
+		},
+		{
+			"scope": ["entity.name.type", "entity.name.class", "support.type", "support.class"],
+			"settings": { "foreground": "#0f7d78" }
+		},
+		{
+			"scope": ["variable"],
+			"settings": { "foreground": "#2d2a41" }
+		},
+		{
+			"scope": ["entity.name.tag"],
+			"settings": { "foreground": "#c23b57" }
+		},
+		{
+			"scope": ["entity.other.attribute-name"],
+			"settings": { "foreground": "#b06a17" }
+		},
+		{
+			"scope": ["punctuation", "meta.brace"],
+			"settings": { "foreground": "#6f6c86" }
+		},
+		{
+			"scope": ["markup.heading"],
+			"settings": { "foreground": "#5a48d8", "fontStyle": "bold" }
+		}
+	]
+}

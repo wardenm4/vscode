@@ -51,6 +51,11 @@
       {
         "command": "openova.focusChat",
         "title": "Openova: Focus Chat"
+      },
+      {
+        "command": "openova.openAgentsWindow",
+        "title": "Openova: Open Agents Window",
+        "icon": "$(multiple-windows)"
       }
     ],
     "keybindings": [
@@ -58,8 +63,22 @@
         "command": "openova.focusChat",
         "key": "ctrl+l",
         "mac": "cmd+l"
+      },
+      {
+        "command": "openova.openAgentsWindow",
+        "key": "ctrl+shift+a",
+        "mac": "cmd+shift+a"
       }
     ],
+    "menus": {
+      "view/title": [
+        {
+          "command": "openova.openAgentsWindow",
+          "when": "view == openova.chat",
+          "group": "navigation"
+        }
+      ]
+    },
     "configuration": {
       "title": "Openova",
       "properties": {
