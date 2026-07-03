@@ -1,0 +1,40 @@
+/*---------------------------------------------------------------------------------------------
+ *  Copyright (c) Microsoft Corporation. All rights reserved.
+ *  Licensed under the MIT License. See License.txt in the project root for license information.
+ *--------------------------------------------------------------------------------------------*/
+
+/* Openova "Agents" title-bar pill — Cursor-style prominent blue button. */
+.monaco-workbench .openova-agents-titlebar-widget {
+	display: inline-flex;
+	align-items: center;
+	gap: 5px;
+	height: 22px;
+	padding: 0 10px;
+	margin: 0 4px;
+	border-radius: 5px;
+	cursor: pointer;
+	background-color: #1f6feb;
+	color: #ffffff;
+	font-size: 12px;
+	font-weight: 600;
+	-webkit-app-region: no-drag;
+	white-space: nowrap;
+}
+
+.monaco-workbench .openova-agents-titlebar-widget:hover {
+	background-color: #388bfd;
+}
+
+.monaco-workbench .openova-agents-titlebar-widget:focus-visible {
+	outline: 1px solid var(--vscode-focusBorder);
+	outline-offset: 1px;
+}
+
+.monaco-workbench .openova-agents-titlebar-widget > .openova-agents-titlebar-widget-icon {
+	font-size: 12px;
+	line-height: 1;
+}
+
+.monaco-workbench .openova-agents-titlebar-widget > .openova-agents-titlebar-widget-label {
+	line-height: 22px;
+}
