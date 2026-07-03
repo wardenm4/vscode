@@ -250,6 +250,8 @@ export interface IProductConfiguration {
 	readonly aiGeneratedWorkspaceTrust?: IAiGeneratedWorkspaceTrust;
 
 	readonly defaultChatAgent: IDefaultChatAgent;
+	/** Openova: disables the default-chat-agent sign-in wizard on first run. */
+	readonly skipWelcomeOnboarding?: boolean;
 	readonly chatParticipantRegistry?: string;
 	readonly chatSessionRecommendations?: IChatSessionRecommendation[];
 	readonly emergencyAlertUrl?: string;

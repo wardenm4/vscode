@@ -1,15 +1,13 @@
-# Allowlist of pre-existing JavaScript files (.js, .cjs, .mjs).
-#
-# This file is consumed by eslint.config.js and gates the
-# `local/code-no-new-javascript-files` lint rule.
-#
-# DO NOT ADD NEW ENTRIES. Write new files in TypeScript instead.
-# Modifications to this file require sign-off from the CODEOWNERS.
-#
-# Lines starting with `#` are comments. Blank lines are ignored.
 
 .github/skills/heap-snapshot-analysis/helpers/streamSnapshot.mjs
 .vscode-test.js
+#
+# `local/code-no-new-javascript-files` lint rule.
+# Allowlist of pre-existing JavaScript files (.js, .cjs, .mjs).
+# DO NOT ADD NEW ENTRIES. Write new files in TypeScript instead.
+# Lines starting with `#` are comments. Blank lines are ignored.
+# Modifications to this file require sign-off from the CODEOWNERS.
+# This file is consumed by eslint.config.js and gates the
 build/azure-pipelines/common/installPlaywright.js
 build/azure-pipelines/github-check-run.js
 build/builtin/browser-main.js
@@ -68,6 +66,7 @@ extensions/media-preview/media/videoPreview.js
 extensions/microsoft-authentication/packageMocks/dpapi/dpapi.js
 extensions/microsoft-authentication/packageMocks/keytar/index.js
 extensions/objective-c/build/update-grammars.js
+extensions/openova-agent/media/main.js
 extensions/php/build/update-grammar.mjs
 extensions/postinstall.mjs
 extensions/razor/build/update-grammar.mjs
@@ -133,9 +132,9 @@ src/vs/workbench/services/keybinding/test/node/win_de_ch.js
 src/vs/workbench/services/keybinding/test/node/win_en_us.js
 src/vs/workbench/services/keybinding/test/node/win_por_ptb.js
 src/vs/workbench/services/keybinding/test/node/win_ru.js
-src/vs/workbench/services/search/test/node/fixtures/examples/NullPoinderException.js
 src/vs/workbench/services/search/test/node/fixtures/examples/company.js
 src/vs/workbench/services/search/test/node/fixtures/examples/employee.js
+src/vs/workbench/services/search/test/node/fixtures/examples/NullPoinderException.js
 src/vs/workbench/services/search/test/node/fixtures/examples/small.js
 test/automation/tools/copy-driver-definition.js
 test/automation/tools/copy-package-version.js

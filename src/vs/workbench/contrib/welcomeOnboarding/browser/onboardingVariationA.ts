@@ -10,7 +10,6 @@ import { isCancellationError } from '../../../../base/common/errors.js';
 import { StopWatch } from '../../../../base/common/stopwatch.js';
 import { URI } from '../../../../base/common/uri.js';
 import { isWindows, isMacintosh, isLinux } from '../../../../base/common/platform.js';
-import { assertDefined } from '../../../../base/common/types.js';
 import { FileAccess } from '../../../../base/common/network.js';
 import { ILayoutService } from '../../../../platform/layout/browser/layoutService.js';
 import { KeyCode } from '../../../../base/common/keyCodes.js';
@@ -77,7 +76,8 @@ type OnboardingActionEvent = {
 
 type EnterpriseSignInUiState = 'options' | 'instance' | 'progress';
 
-assertDefined(product.defaultChatAgent, 'Onboarding requires a default chat agent product configuration.');
+// Openova: the wizard is skipped via product.skipWelcomeOnboarding (see show());
+// the defaultChatAgent metadata itself remains configured, so no assert needed.
 const defaultChat = product.defaultChatAgent;
 
 /**
@@ -167,6 +167,12 @@ export class OnboardingVariationA extends Disposable implements IOnboardingServi
 	}
 
 	show(): void {
+		// Openova: the wizard is entirely about the default chat agent
+		// (GitHub sign-in, Copilot setup) — skip it when the product opts out.
+		if (product.skipWelcomeOnboarding || !product.defaultChatAgent) {
+			this._onDidComplete.fire();
+			return;
+		}
 		if (this.overlay) {
 			return;
 		}

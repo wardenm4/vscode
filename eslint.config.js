@@ -11,7 +11,9 @@ import tseslint from 'typescript-eslint';
 
 import stylisticTs from '@stylistic/eslint-plugin-ts';
 import * as pluginLocal from './.eslint-plugin-local/index.ts';
-import * as pluginCopilotLocal from './extensions/copilot/.eslintplugin/index.ts';
+// Openova: extensions/copilot is not shipped; its lint plugin is stubbed so the
+// (now file-matchless) copilot config blocks below stay inert without erroring.
+const pluginCopilotLocal = { rules: {} };
 import pluginImport from 'eslint-plugin-import';
 import pluginJsdoc from 'eslint-plugin-jsdoc';
 

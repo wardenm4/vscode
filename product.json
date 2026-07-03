@@ -95,6 +95,8 @@
 			}
 		}
 	],
+	"skipWelcomeOnboarding": true,
+	"_note": "defaultChatAgent stays as inert metadata: 12 core modules read it unguarded, but the extension it references is not shipped in Openova — the Openova Agent extension provides AI. skipWelcomeOnboarding disables the GitHub sign-in wizard.",
 	"defaultChatAgent": {
 		"extensionId": "GitHub.copilot",
 		"chatExtensionId": "GitHub.copilot-chat",
@@ -158,14 +160,6 @@
 		"tokenEntitlementUrl": "https://api.github.com/copilot_internal/v2/token",
 		"mcpRegistryDataUrl": "https://api.github.com/copilot/mcp_registry",
 		"managedSettingsUrl": "https://api.github.com/copilot_internal/managed_settings"
-	},
-	"trustedExtensionAuthAccess": {
-		"github": [
-			"GitHub.copilot-chat"
-		],
-		"github-enterprise": [
-			"GitHub.copilot-chat"
-		]
 	},
 	"onboardingKeymaps": [
 		{
@@ -242,9 +236,7 @@
 			"type": "light"
 		}
 	],
-	"builtInExtensionsEnabledWithAutoUpdates": [
-		"GitHub.copilot-chat"
-	],
+	"builtInExtensionsEnabledWithAutoUpdates": [],
 	"sessionsWindowAllowedExtensions": [],
 	"voiceWsUrl": "wss://falcon-caas.mai.microsoft.com/voice-code/api/v1/realtime/voice"
 }

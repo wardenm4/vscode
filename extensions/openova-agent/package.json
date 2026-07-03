@@ -12,7 +12,10 @@
     "Other"
   ],
   "main": "./out/extension.js",
-  "activationEvents": [],
+  "activationEvents": [
+    "onStartupFinished",
+    "onUri"
+  ],
   "capabilities": {
     "virtualWorkspaces": true,
     "untrustedWorkspaces": {
@@ -77,7 +80,7 @@
         },
         "openova.model": {
           "type": "string",
-          "default": "",
+          "default": "qwen3.5:9b",
           "description": "Model id (discovered models are offered in the picker)."
         },
         "openova.reasoningEffort": {
@@ -96,6 +99,11 @@
           "type": "string",
           "default": "",
           "description": "Base URL override for the active provider."
+        },
+        "openova.checkCommand": {
+          "type": "string",
+          "default": "",
+          "description": "Optional command (typecheck/lint/test) the agent must pass before finishing."
         }
       }
     }

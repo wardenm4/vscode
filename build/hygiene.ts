@@ -341,8 +341,12 @@ if (import.meta.main) {
 				const some = out.split(/\r?\n/).filter((l) => !!l);
 
 				if (some.length > 0) {
-					// Check copilot engines.vscode version if relevant files are staged
-					if (some.some(f => f === 'package.json' || f.startsWith('extensions/copilot/'))) {
+					// Openova: extensions/copilot is not shipped — only run the engines
+					// check when that extension actually exists in the tree.
+					if (
+						some.some(f => f === 'package.json' || f.startsWith('extensions/copilot/')) &&
+						fs.existsSync(path.join(process.cwd(), 'extensions/copilot/package.json'))
+					) {
 						const copilotError = checkCopilotEnginesVersion(process.cwd());
 						if (copilotError) {
 							console.error(copilotError);
