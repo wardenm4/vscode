@@ -36,6 +36,18 @@ interface WriteEntry {
 	isNew: boolean;
 }
 
+interface PlanStep {
+	id: string;
+	text: string;
+	done: boolean;
+}
+
+interface Plan {
+	title: string;
+	status: 'proposed' | 'running' | 'done' | 'cancelled';
+	steps: PlanStep[];
+}
+
 interface UiMessage {
 	id: string;
 	role: 'user' | 'assistant';
@@ -43,6 +55,7 @@ interface UiMessage {
 	steps?: UiStep[];
 	writes?: WriteEntry[];
 	reviewDismissed?: boolean;
+	plan?: Plan;
 }
 
 interface Session {
@@ -54,7 +67,7 @@ interface Session {
 interface QueuedItem {
 	id: string;
 	text: string;
-	mode: 'ask' | 'agent';
+	mode: 'ask' | 'agent' | 'plan';
 }
 
 interface RunState {
@@ -120,11 +133,17 @@ export function activate(context: vscode.ExtensionContext): void {
 						text?: string;
 						mode?: string;
 						thenUndo?: boolean;
+						thenApprove?: boolean;
 					};
 					fs.unlinkSync(triggerPath);
 					trace(`devTrigger ${JSON.stringify(req)}`);
 					if (!req.text) { return; }
-					await provider.startRun(req.text, req.mode === 'ask' ? 'ask' : 'agent');
+					const mode = req.mode === 'ask' ? 'ask' : req.mode === 'plan' ? 'plan' : 'agent';
+					await provider.startRun(req.text, mode);
+					if (req.thenApprove) {
+						const ok = await provider.approveLastPlan();
+						trace(`devApprove ran=${ok}`);
+					}
 					if (req.thenUndo) {
 						const n = await provider.undoLastRun(true);
 						trace(`devUndo reverted=${n}`);
@@ -187,15 +206,21 @@ class OpenovaChatViewProvider implements vscode.WebviewViewProvider {
 		// standalone app ships). The in-memory session keeps the live bar.
 		const sanitized = this.sessions.slice(0, 40).map((s) => ({
 			...s,
-			messages: s.messages.map((m) =>
-				m.writes
-					? {
-						...m,
+			messages: s.messages.map((m) => {
+				let out = m;
+				if (out.writes) {
+					out = {
+						...out,
 						reviewDismissed: true,
-						writes: m.writes.map((w) => ({ ...w, before: undefined }))
-					}
-					: m
-			)
+						writes: out.writes.map((w) => ({ ...w, before: undefined }))
+					};
+				}
+				// A plan mid-execution can't still be running after a reload.
+				if (out.plan && out.plan.status === 'running') {
+					out = { ...out, plan: { ...out.plan, status: 'cancelled' } };
+				}
+				return out;
+			})
 		}));
 		void this.context.workspaceState.update('openova.sessions', {
 			sessions: sanitized,
@@ -236,12 +261,27 @@ class OpenovaChatViewProvider implements vscode.WebviewViewProvider {
 	}
 
 	/** Programmatic entry point (URI handler / commands / dev harness). */
-	async startRun(text: string, mode: 'ask' | 'agent'): Promise<void> {
+	async startRun(text: string, mode: 'ask' | 'agent' | 'plan'): Promise<void> {
 		const sessionId = this.activeSession;
 		trace(`startRun mode=${mode} session=${sessionId} busy=${!!(sessionId && this.runs.get(sessionId))}`);
 		if (!sessionId || this.runs.get(sessionId)) { return; }
 		if (mode === 'agent') { await this.sendAgent(sessionId, text); }
+		else if (mode === 'plan') { await this.sendPlan(sessionId, text); }
 		else { await this.sendAsk(sessionId, text); }
+	}
+
+	/** Dev harness: approve the most recent proposed plan and await the run. */
+	async approveLastPlan(): Promise<boolean> {
+		for (const sess of this.sessions) {
+			for (let i = sess.messages.length - 1; i >= 0; i--) {
+				const m = sess.messages[i];
+				if (m.plan && m.plan.status === 'proposed') {
+					await this.approvePlan(sess.id, m.id);
+					return true;
+				}
+			}
+		}
+		return false;
 	}
 
 	/** Dev harness: undo the most recent run's writes (skips the confirm). */
@@ -308,7 +348,7 @@ class OpenovaChatViewProvider implements vscode.WebviewViewProvider {
 			case 'send': {
 				const sessionId = String(msg.sessionId ?? this.activeSession ?? '');
 				const text = String(msg.text ?? '').trim();
-				const mode = msg.mode === 'ask' ? 'ask' : 'agent';
+				const mode = msg.mode === 'ask' ? 'ask' : msg.mode === 'plan' ? 'plan' : 'agent';
 				if (!text || !this.session(sessionId)) { return; }
 				if (this.runs.get(sessionId)) {
 					// A run is streaming — queue the follow-up (dispatched at run end).
@@ -319,9 +359,36 @@ class OpenovaChatViewProvider implements vscode.WebviewViewProvider {
 					return;
 				}
 				if (mode === 'agent') { await this.sendAgent(sessionId, text); }
+				else if (mode === 'plan') { await this.sendPlan(sessionId, text); }
 				else { await this.sendAsk(sessionId, text); }
 				break;
 			}
+			case 'planEdit':
+				this.mutatePlan(String(msg.sessionId), String(msg.msgId), (p) => {
+					const st = p.steps.find((x) => x.id === String(msg.stepId));
+					if (st && p.status === 'proposed') { st.text = String(msg.text ?? st.text); }
+				});
+				break;
+			case 'planAdd':
+				this.mutatePlan(String(msg.sessionId), String(msg.msgId), (p) => {
+					if (p.status === 'proposed') { p.steps.push({ id: uid(), text: '', done: false }); }
+				});
+				break;
+			case 'planRemove':
+				this.mutatePlan(String(msg.sessionId), String(msg.msgId), (p) => {
+					if (p.status === 'proposed') {
+						p.steps = p.steps.filter((x) => x.id !== String(msg.stepId));
+					}
+				});
+				break;
+			case 'planCancel':
+				this.mutatePlan(String(msg.sessionId), String(msg.msgId), (p) => {
+					if (p.status === 'proposed') { p.status = 'cancelled'; }
+				});
+				break;
+			case 'planApprove':
+				await this.approvePlan(String(msg.sessionId), String(msg.msgId));
+				break;
 			case 'cancelQueued': {
 				const sessionId = String(msg.sessionId ?? '');
 				const q = (this.queues.get(sessionId) ?? []).filter((x) => x.id !== String(msg.id));
@@ -529,8 +596,104 @@ class OpenovaChatViewProvider implements vscode.WebviewViewProvider {
 		this.postQueue(sessionId);
 		if (next) {
 			if (next.mode === 'agent') { void this.sendAgent(sessionId, next.text); }
+			else if (next.mode === 'plan') { void this.sendPlan(sessionId, next.text); }
 			else { void this.sendAsk(sessionId, next.text); }
 		}
+	}
+
+	// ---- plan mode ----------------------------------------------------------
+
+	private mutatePlan(sessionId: string, msgId: string, fn: (p: Plan) => void): void {
+		this.mutateMsg(sessionId, msgId, (m) => {
+			if (m.plan) { fn(m.plan); }
+		});
+		this.persist();
+		this.postSessions();
+	}
+
+	/** Draft an editable step-by-step plan (approve to execute). */
+	private async sendPlan(sessionId: string, text: string): Promise<void> {
+		const sess = this.session(sessionId)!;
+		const wasFirstTurn = sess.messages.length === 0;
+		const userMsg: UiMessage = { id: uid(), role: 'user', content: text };
+		const planMsg: UiMessage = { id: uid(), role: 'assistant', content: '' };
+		if (wasFirstTurn) { sess.title = text.slice(0, 40); }
+		sess.messages.push(userMsg, planMsg);
+		this.postSessions();
+		this.post({ type: 'running', sessionId, running: true });
+
+		const run: RunState = { stop: false, requestId: uid() };
+		this.runs.set(sessionId, run);
+		const s = this.settings();
+		try {
+			let out = '';
+			await runChat({
+				requestId: run.requestId!,
+				provider: s.provider,
+				baseURL: s.baseUrl || undefined,
+				model: s.model,
+				system:
+					'You are a senior software engineer planning a coding task. Respond with ONLY this exact format:\n' +
+					'PLAN: <short title>\n1. <first step>\n2. <second step>\n' +
+					'Each step is ONE concrete action (a specific file to create/modify, or a command to run). ' +
+					'Use 3-10 steps. No other prose, no markdown headings, no code blocks.',
+				messages: [{ role: 'user', content: text }],
+				temperature: 0.2,
+				maxTokens: 2048,
+				reasoningEffort: s.effort,
+				onDelta: (d) => {
+					out += d;
+					this.post({ type: 'live', sessionId, msgId: planMsg.id, text: out.slice(0, 800) });
+				},
+				onError: (e) => {
+					out += `\n\n**Error:** ${e}`;
+				}
+			});
+			const clean = out.replace(/<think(?:ing)?>[\s\S]*?<\/think(?:ing)?>/gi, '');
+			const lines = clean.split('\n');
+			const title =
+				(lines.find((l) => /^\s*PLAN:/i.test(l)) ?? '').replace(/^\s*PLAN:\s*/i, '').trim() ||
+				text.slice(0, 60);
+			const steps: PlanStep[] = lines
+				.map((l) => /^\s*\d+[.)]\s+(.+)$/.exec(l))
+				.filter((m): m is RegExpExecArray => !!m)
+				.map((m) => ({ id: uid(), text: m[1].trim(), done: false }));
+			this.mutateMsg(sessionId, planMsg.id, (m) => {
+				if (steps.length) {
+					m.content = '';
+					m.plan = { title, status: 'proposed', steps };
+				} else {
+					m.content = clean.trim() || '(no plan produced)';
+				}
+			});
+			trace(`plan proposed steps=${steps.length}`);
+		} finally {
+			this.post({ type: 'live', sessionId, msgId: planMsg.id, text: '' });
+			this.finishRun(sessionId, wasFirstTurn);
+		}
+	}
+
+	/** Approve & Run: execute the plan as an agent task with step check-off. */
+	private async approvePlan(sessionId: string, msgId: string): Promise<void> {
+		const sess = this.session(sessionId);
+		const msg = sess?.messages.find((m) => m.id === msgId);
+		const plan = msg?.plan;
+		if (!plan || plan.status !== 'proposed' || this.runs.get(sessionId)) { return; }
+		const steps = plan.steps.filter((s) => s.text.trim());
+		if (!steps.length) { return; }
+		plan.steps = steps;
+		plan.status = 'running';
+		this.persist();
+		this.postSessions();
+		const task =
+			`Execute this plan, in order. After completing each step, call ` +
+			`<tool name="update_plan" step="N"></tool> with that step's number.\n\n` +
+			`Plan: ${plan.title}\n` +
+			steps.map((s, i) => `${i + 1}. ${s.text}`).join('\n');
+		await this.sendAgent(sessionId, task, {
+			displayText: `Run plan: ${plan.title}`,
+			plan: { sessionId, msgId }
+		});
 	}
 
 	// ---- ask mode -----------------------------------------------------------
@@ -583,7 +746,11 @@ class OpenovaChatViewProvider implements vscode.WebviewViewProvider {
 
 	// ---- agent mode ---------------------------------------------------------
 
-	private async sendAgent(sessionId: string, text: string): Promise<void> {
+	private async sendAgent(
+		sessionId: string,
+		text: string,
+		opts: { displayText?: string; plan?: { sessionId: string; msgId: string } } = {}
+	): Promise<void> {
 		const root = vscode.workspace.workspaceFolders?.[0]?.uri.fsPath;
 		trace(`sendAgent root=${root ?? 'NONE'} model=${this.settings().model}`);
 		if (!root) {
@@ -592,7 +759,7 @@ class OpenovaChatViewProvider implements vscode.WebviewViewProvider {
 		}
 		const sess = this.session(sessionId)!;
 		const wasFirstTurn = sess.messages.length === 0;
-		const userMsg: UiMessage = { id: uid(), role: 'user', content: text };
+		const userMsg: UiMessage = { id: uid(), role: 'user', content: opts.displayText ?? text };
 		const agentMsg: UiMessage = { id: uid(), role: 'assistant', content: '', steps: [] };
 		if (wasFirstTurn) { sess.title = text.slice(0, 40); }
 		// A new run supersedes earlier review windows (undoing an old turn after
@@ -645,6 +812,15 @@ class OpenovaChatViewProvider implements vscode.WebviewViewProvider {
 		};
 		const tools = createTools(host);
 		tools.check = createCheck(host);
+		if (opts.plan) {
+			const ref = opts.plan;
+			tools.updatePlan = (stepIndex) => {
+				this.mutatePlan(ref.sessionId, ref.msgId, (p) => {
+					const st = p.steps[stepIndex - 1];
+					if (st) { st.done = true; }
+				});
+			};
+		}
 		const s = this.settings();
 
 		const title = (name: string, args: Record<string, unknown>): string => {
@@ -712,6 +888,13 @@ class OpenovaChatViewProvider implements vscode.WebviewViewProvider {
 			this.mutateMsg(sessionId, agentMsg.id, (m) => {
 				if (writes.size) { m.writes = Array.from(writes.values()); }
 			});
+			if (opts.plan) {
+				const ref = opts.plan;
+				this.mutatePlan(ref.sessionId, ref.msgId, (p) => {
+					if (p.status === 'running') { p.status = 'done'; }
+				});
+				trace('plan run finished');
+			}
 			this.post({ type: 'live', sessionId, msgId: agentMsg.id, text: '' });
 			this.finishRun(sessionId, wasFirstTurn);
 		}

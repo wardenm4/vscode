@@ -477,6 +477,140 @@ body {
 	visibility: visible;
 }
 
+/* plan card */
+.plan {
+	margin-top: 6px;
+	border: 1px solid var(--vscode-panel-border);
+	border-radius: 6px;
+	overflow: hidden;
+}
+.plan.running {
+	border-color: var(--vscode-focusBorder);
+}
+.plan .phead {
+	display: flex;
+	align-items: center;
+	gap: 8px;
+	padding: 6px 9px;
+	border-bottom: 1px solid var(--vscode-panel-border);
+}
+.plan .ptitle {
+	flex: 1;
+	min-width: 0;
+	font-weight: 600;
+	font-size: 12.5px;
+	overflow: hidden;
+	text-overflow: ellipsis;
+	white-space: nowrap;
+}
+.plan .pbadge {
+	font-size: 10px;
+	text-transform: uppercase;
+	letter-spacing: 0.4px;
+	border-radius: 8px;
+	padding: 1px 7px;
+	border: 1px solid var(--vscode-input-border, #555);
+	color: var(--vscode-descriptionForeground);
+	flex-shrink: 0;
+}
+.plan .pbadge.running {
+	border-color: var(--vscode-focusBorder);
+	color: var(--vscode-focusBorder);
+}
+.plan .pbadge.done {
+	border-color: var(--vscode-charts-green, #89d185);
+	color: var(--vscode-charts-green, #89d185);
+}
+.plan .psteps {
+	padding: 5px;
+	display: flex;
+	flex-direction: column;
+	gap: 3px;
+}
+.plan .pstep {
+	display: flex;
+	align-items: center;
+	gap: 7px;
+	font-size: 12px;
+}
+.plan .pmark {
+	width: 17px;
+	height: 17px;
+	border-radius: 50%;
+	border: 1px solid var(--vscode-input-border, #555);
+	display: inline-flex;
+	align-items: center;
+	justify-content: center;
+	font-size: 10px;
+	color: var(--vscode-descriptionForeground);
+	flex-shrink: 0;
+}
+.plan .pstep.done .pmark {
+	border-color: var(--vscode-charts-green, #89d185);
+	color: var(--vscode-charts-green, #89d185);
+}
+.plan .pstep input {
+	flex: 1;
+	min-width: 0;
+	background: var(--vscode-input-background);
+	color: var(--vscode-input-foreground);
+	border: 1px solid var(--vscode-input-border, transparent);
+	border-radius: 4px;
+	font-size: 12px;
+	padding: 3px 6px;
+	outline: none;
+}
+.plan .pstep input:focus {
+	border-color: var(--vscode-focusBorder);
+}
+.plan .ptext {
+	flex: 1;
+	min-width: 0;
+}
+.plan .pstep.done .ptext {
+	color: var(--vscode-descriptionForeground);
+	text-decoration: line-through;
+}
+.plan .prm {
+	border: none;
+	background: transparent;
+	color: var(--vscode-descriptionForeground);
+	cursor: pointer;
+	font-size: 11px;
+}
+.plan .pactions {
+	display: flex;
+	align-items: center;
+	gap: 6px;
+	padding: 6px 8px;
+	border-top: 1px solid var(--vscode-panel-border);
+}
+.plan .pspacer {
+	flex: 1;
+}
+.plan .padd,
+.plan .pcancel {
+	border: 1px solid var(--vscode-input-border, transparent);
+	background: transparent;
+	color: var(--vscode-descriptionForeground);
+	border-radius: 4px;
+	font-size: 11.5px;
+	padding: 2px 9px;
+	cursor: pointer;
+}
+.plan .papprove {
+	border: none;
+	background: var(--vscode-button-background);
+	color: var(--vscode-button-foreground);
+	border-radius: 4px;
+	font-size: 11.5px;
+	padding: 3px 11px;
+	cursor: pointer;
+}
+.plan .papprove:disabled {
+	opacity: 0.5;
+}
+
 /* queued follow-ups */
 .queued {
 	display: flex;

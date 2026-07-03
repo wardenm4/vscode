@@ -124,6 +124,9 @@
 					}
 					box.appendChild(steps);
 				}
+				if (m.plan) {
+					box.appendChild(renderPlan(m));
+				}
 				if (m.id === liveMsgId && liveText) {
 					box.appendChild(el('div', 'live', liveText));
 				}
@@ -175,7 +178,7 @@
 
 		const bar = el('div', 'bar');
 		const mode = document.createElement('select');
-		for (const [v, label] of [['agent', 'Agent'], ['ask', 'Ask']]) {
+		for (const [v, label] of [['agent', 'Agent'], ['ask', 'Ask'], ['plan', 'Plan']]) {
 			const o = document.createElement('option');
 			o.value = v;
 			o.textContent = label;
@@ -301,6 +304,63 @@
 		}
 		bar.appendChild(files);
 		return bar;
+	}
+
+	function renderPlan(m) {
+		const p = m.plan;
+		const card = el('div', 'plan ' + p.status);
+		const head = el('div', 'phead');
+		head.appendChild(el('span', 'ptitle', p.title));
+		const done = p.steps.filter((s) => s.done).length;
+		const badge =
+			p.status === 'proposed' ? 'Awaiting approval'
+				: p.status === 'running' ? 'Running ' + done + '/' + p.steps.length
+					: p.status === 'done' ? 'Completed' : 'Cancelled';
+		head.appendChild(el('span', 'pbadge ' + p.status, badge));
+		card.appendChild(head);
+		const steps = el('div', 'psteps');
+		const editable = p.status === 'proposed';
+		p.steps.forEach((s, i) => {
+			const row = el('div', 'pstep' + (s.done ? ' done' : ''));
+			const mark = el('span', 'pmark');
+			// allow-any-unicode-next-line
+			mark.textContent = s.done ? '✓' : String(i + 1);
+			row.appendChild(mark);
+			if (editable) {
+				const input = document.createElement('input');
+				input.value = s.text;
+				input.placeholder = 'Describe this step…';
+				input.onchange = () =>
+					vscode.postMessage({ type: 'planEdit', sessionId: active, msgId: m.id, stepId: s.id, text: input.value });
+				row.appendChild(input);
+				// allow-any-unicode-next-line
+				const rm = el('button', 'prm', '✕');
+				rm.title = 'Remove step';
+				rm.onclick = () =>
+					vscode.postMessage({ type: 'planRemove', sessionId: active, msgId: m.id, stepId: s.id });
+				row.appendChild(rm);
+			} else {
+				row.appendChild(el('span', 'ptext', s.text));
+			}
+			steps.appendChild(row);
+		});
+		card.appendChild(steps);
+		if (editable) {
+			const actions = el('div', 'pactions');
+			const add = el('button', 'padd', '+ Add step');
+			add.onclick = () => vscode.postMessage({ type: 'planAdd', sessionId: active, msgId: m.id });
+			actions.appendChild(add);
+			actions.appendChild(el('span', 'pspacer'));
+			const cancel = el('button', 'pcancel', 'Cancel');
+			cancel.onclick = () => vscode.postMessage({ type: 'planCancel', sessionId: active, msgId: m.id });
+			actions.appendChild(cancel);
+			const approve = el('button', 'papprove', 'Approve & Run');
+			approve.disabled = running;
+			approve.onclick = () => vscode.postMessage({ type: 'planApprove', sessionId: active, msgId: m.id });
+			actions.appendChild(approve);
+			card.appendChild(actions);
+		}
+		return card;
 	}
 
 	function renderStep(st) {

@@ -532,9 +532,11 @@ function packageTask(platform: string, arch: string, sourceFolderName: string, d
 }
 
 function hasAuthenticodeSignature(filePath: string): Promise<boolean> {
-	return new Promise((resolve, reject) => {
+	return new Promise((resolve) => {
 		const proc = cp.spawn('signtool.exe', ['verify', '/pa', filePath]);
-		proc.on('error', reject);
+		// Openova: local builds have no Windows SDK signtool on PATH — treat a
+		// missing tool as "not signed" (nothing to strip) instead of failing.
+		proc.on('error', () => resolve(false));
 		proc.on('exit', code => resolve(code === 0));
 	});
 }
@@ -614,7 +616,9 @@ function prepareCopilotRipgrepShimTask(platform: string, arch: string, destinati
 			: path.join(outputDir, versionedResourcesFolder, 'resources', 'app');
 		const appNodeModulesDir = path.join(appBase, 'node_modules');
 
+		// Openova: the copilot extension is not shipped — nothing to shim.
 		const builtInCopilotExtensionDir = path.join(appBase, 'extensions', 'copilot');
+		if (!fs.existsSync(builtInCopilotExtensionDir)) { return; }
 		prepareBuiltInCopilotRipgrepShim(platform, arch, builtInCopilotExtensionDir, appNodeModulesDir);
 	};
 }
