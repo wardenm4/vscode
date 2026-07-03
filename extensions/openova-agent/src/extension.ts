@@ -109,7 +109,7 @@ export function activate(context: vscode.ExtensionContext): void {
 			provider.newSession();
 		}),
 		vscode.commands.registerCommand('openova.openAgentsWindow', () => {
-			provider.openAgentsWindow();
+			void provider.openAgentsWindow();
 		}),
 		// Inline edit (Ctrl+I): rewrite the selection (or current line) per an
 		// instruction, streamed from the configured model, applied in place —
@@ -222,9 +222,15 @@ export function activate(context: vscode.ExtensionContext): void {
 						context?: string[];
 						inline?: { file: string; startLine: number; endLine: number; instruction: string };
 						completion?: { file: string; line: number; col: number };
+						agentsWindow?: boolean;
 					};
 					fs.unlinkSync(triggerPath);
 					trace(`devTrigger ${JSON.stringify(req)}`);
+					if (req.agentsWindow) {
+						await provider.openAgentsWindow();
+						trace('devAgentsWindow opened');
+						return;
+					}
 					if (req.completion) {
 						const doc = await vscode.workspace.openTextDocument(req.completion.file);
 						const text = await completeAtPosition(
@@ -349,8 +355,8 @@ class OpenovaChatViewProvider implements vscode.WebviewViewProvider {
 		void this.panel?.webview.postMessage(msg);
 	}
 
-	/** Full-tab mission-control surface — same engine as the sidebar view. */
-	openAgentsWindow(): void {
+	/** Separate-OS-window mission control (Cursor-style) — same engine as the sidebar view. */
+	async openAgentsWindow(): Promise<void> {
 		if (this.panel) {
 			this.panel.reveal();
 			return;
@@ -374,6 +380,14 @@ class OpenovaChatViewProvider implements vscode.WebviewViewProvider {
 			this.panel = undefined;
 		});
 		this.panel = panel;
+		// Pop the panel out into its own OS window like Cursor's agent app.
+		// The panel is the active editor immediately after creation, so the
+		// move targets it; if the move fails we gracefully keep the tab.
+		try {
+			await vscode.commands.executeCommand('workbench.action.moveEditorToNewWindow');
+		} catch {
+			// aux windows unavailable — the in-tab panel still works
+		}
 	}
 
 	private postSessions(): void {
