@@ -121,9 +121,25 @@
 				'. The agent reads and writes workspace files and runs gated commands.';
 			msgs.appendChild(empty);
 		} else {
-			for (const m of sess.messages) {
+			for (let mi = 0; mi < sess.messages.length; mi++) {
+				const m = sess.messages[mi];
 				const box = el('div', 'msg ' + m.role);
-				box.appendChild(el('div', 'who', m.role === 'user' ? 'You' : 'Openova'));
+				const who = el('div', 'who', m.role === 'user' ? 'You' : 'Openova');
+				// Checkpoint: a user turn whose run recorded restorable writes gets
+				// a whole-run restore affordance (works even after Keep all).
+				if (m.role === 'user') {
+					const next = sess.messages[mi + 1];
+					const restorable =
+						next && next.writes && next.writes.some((w) => w.isNew || w.before !== undefined);
+					if (restorable) {
+						const rc = el('button', 'restore', 'Restore checkpoint');
+						rc.title = 'Restore every file this turn changed to its pre-run state';
+						rc.onclick = () =>
+							vscode.postMessage({ type: 'undoWrites', sessionId: active, msgId: next.id });
+						who.appendChild(rc);
+					}
+				}
+				box.appendChild(who);
 				if (m.steps && m.steps.length) {
 					const steps = el('div', 'steps');
 					for (const st of m.steps) {

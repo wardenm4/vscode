@@ -109,6 +109,85 @@ export function activate(context: vscode.ExtensionContext): void {
 		vscode.commands.registerCommand('openova.openAgentsWindow', () => {
 			provider.openAgentsWindow();
 		}),
+		// Inline edit (Ctrl+I): rewrite the selection (or current line) per an
+		// instruction, streamed from the configured model, applied in place —
+		// the editor's undo stack is the rollback.
+		vscode.commands.registerCommand(
+			'openova.inlineEdit',
+			async (args?: { instruction?: string }) => {
+				const editor = vscode.window.activeTextEditor;
+				if (!editor) { return; }
+				const doc = editor.document;
+				const sel = editor.selection;
+				const range = sel.isEmpty
+					? doc.lineAt(sel.active.line).range
+					: new vscode.Range(sel.start, sel.end);
+				const instruction =
+					args?.instruction ??
+					(await vscode.window.showInputBox({
+						prompt: 'Openova inline edit',
+						placeHolder: 'e.g. add error handling, convert to async, fix the bug…'
+					}));
+				if (!instruction?.trim()) { return; }
+				const original = doc.getText(range);
+				const before = doc.getText(
+					new vscode.Range(new vscode.Position(Math.max(0, range.start.line - 20), 0), range.start)
+				);
+				const after = doc.getText(
+					new vscode.Range(
+						range.end,
+						doc.lineAt(Math.min(doc.lineCount - 1, range.end.line + 20)).range.end
+					)
+				);
+				const cfg = vscode.workspace.getConfiguration('openova');
+				trace(`inlineEdit lines=${range.start.line + 1}-${range.end.line + 1}`);
+				await vscode.window.withProgress(
+					{ location: vscode.ProgressLocation.Notification, title: 'Openova: editing…' },
+					async () => {
+						try {
+							const out = await complete({
+								requestId: uid(),
+								provider: cfg.get<string>('provider', 'ollama') as AIProvider,
+								baseURL: cfg.get<string>('baseUrl', '') || undefined,
+								model: cfg.get<string>('model', 'qwen3.5:9b'),
+								system:
+									'You are an expert code editor. Rewrite ONLY the provided code section per the instruction. ' +
+									'Reply with ONLY the replacement code — no markdown fences, no commentary, no surrounding context.',
+								messages: [
+									{
+										role: 'user',
+										content:
+											`Language: ${doc.languageId}\n\nContext before:\n${before}\n\n` +
+											`Code section to rewrite:\n${original}\n\nContext after:\n${after}\n\n` +
+											`Instruction: ${instruction}`
+									}
+								],
+								temperature: 0.2,
+								maxTokens: 4096,
+								reasoningEffort: 'off'
+							});
+							let cleaned = out
+								.replace(/<think(?:ing)?>[\s\S]*?<\/think(?:ing)?>/gi, '')
+								.trim()
+								.replace(/^```[\w-]*\n?/, '')
+								.replace(/\n?```$/, '');
+							if (!cleaned.trim()) {
+								void vscode.window.showWarningMessage('Openova: the model returned nothing.');
+								return;
+							}
+							// Preserve the trailing newline shape of the original.
+							if (original.endsWith('\n') && !cleaned.endsWith('\n')) { cleaned += '\n'; }
+							await editor.edit((b) => b.replace(range, cleaned));
+							trace('inlineEdit applied');
+						} catch (e) {
+							void vscode.window.showErrorMessage(
+								`Openova inline edit failed: ${e instanceof Error ? e.message : String(e)}`
+							);
+						}
+					}
+				);
+			}
+		),
 		// Deep link: openova://openova.openova-agent/run?mode=agent&text=…
 		vscode.window.registerUriHandler({
 			handleUri(uri: vscode.Uri): void {
@@ -138,9 +217,24 @@ export function activate(context: vscode.ExtensionContext): void {
 						mode?: string;
 						thenUndo?: boolean;
 						thenApprove?: boolean;
+						inline?: { file: string; startLine: number; endLine: number; instruction: string };
 					};
 					fs.unlinkSync(triggerPath);
 					trace(`devTrigger ${JSON.stringify(req)}`);
+					if (req.inline) {
+						const doc = await vscode.workspace.openTextDocument(req.inline.file);
+						const editor = await vscode.window.showTextDocument(doc);
+						editor.selection = new vscode.Selection(
+							new vscode.Position(req.inline.startLine - 1, 0),
+							doc.lineAt(req.inline.endLine - 1).range.end
+						);
+						await vscode.commands.executeCommand('openova.inlineEdit', {
+							instruction: req.inline.instruction
+						});
+						await doc.save();
+						trace('devInline done');
+						return;
+					}
 					if (!req.text) { return; }
 					const mode = req.mode === 'ask' ? 'ask' : req.mode === 'plan' ? 'plan' : 'agent';
 					await provider.startRun(req.text, mode);

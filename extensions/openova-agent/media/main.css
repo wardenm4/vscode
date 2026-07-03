@@ -110,6 +110,29 @@ body {
 	text-transform: uppercase;
 	color: var(--vscode-descriptionForeground);
 	margin-bottom: 4px;
+	display: flex;
+	align-items: center;
+	gap: 8px;
+}
+.msg .who .restore {
+	border: 1px solid var(--vscode-input-border, transparent);
+	background: transparent;
+	color: var(--vscode-descriptionForeground);
+	border-radius: 4px;
+	font-size: 9.5px;
+	text-transform: none;
+	letter-spacing: 0;
+	font-weight: 400;
+	padding: 1px 7px;
+	cursor: pointer;
+	opacity: 0;
+}
+.msg:hover .who .restore {
+	opacity: 1;
+}
+.msg .who .restore:hover {
+	background: var(--vscode-list-hoverBackground);
+	color: var(--vscode-foreground);
 }
 .msg .body {
 	font-size: 12.5px;

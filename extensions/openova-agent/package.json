@@ -56,6 +56,10 @@
         "command": "openova.openAgentsWindow",
         "title": "Openova: Open Agents Window",
         "icon": "$(multiple-windows)"
+      },
+      {
+        "command": "openova.inlineEdit",
+        "title": "Openova: Inline Edit Selection"
       }
     ],
     "keybindings": [
@@ -68,6 +72,12 @@
         "command": "openova.openAgentsWindow",
         "key": "ctrl+shift+a",
         "mac": "cmd+shift+a"
+      },
+      {
+        "command": "openova.inlineEdit",
+        "key": "ctrl+i",
+        "mac": "cmd+i",
+        "when": "editorTextFocus && !editorReadonly"
       }
     ],
     "menus": {
