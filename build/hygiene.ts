@@ -89,8 +89,11 @@ export function hygiene(some: NodeJS.ReadWriteStream | string[] | undefined, run
 	const productJson = es.through(function (file: VinylFile) {
 		const product = JSON.parse(file.contents!.toString('utf8'));
 
-		if (product.extensionsGallery) {
-			console.error(`product.json: Contains 'extensionsGallery'`);
+		// Openova fork: extensionsGallery deliberately points at Open VSX
+		// (Microsoft's marketplace ToS excludes forks), so upstream's guard
+		// against configuring a gallery only rejects non-Open-VSX endpoints.
+		if (product.extensionsGallery && !`${product.extensionsGallery.serviceUrl}`.includes('open-vsx.org')) {
+			console.error(`product.json: Contains a non-Open-VSX 'extensionsGallery'`);
 			errorCount++;
 		}
 

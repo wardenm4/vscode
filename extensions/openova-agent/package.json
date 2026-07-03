@@ -1,0 +1,111 @@
+{
+  "name": "openova-agent",
+  "displayName": "Openova Agent",
+  "description": "Openova's built-in AI coding agent — chat, autonomous runs, plans, checkpoints, MCP.",
+  "version": "0.0.1",
+  "publisher": "openova",
+  "license": "MIT",
+  "engines": {
+    "vscode": "^1.128.0"
+  },
+  "categories": [
+    "Other"
+  ],
+  "main": "./out/extension.js",
+  "activationEvents": [],
+  "capabilities": {
+    "virtualWorkspaces": true,
+    "untrustedWorkspaces": {
+      "supported": "limited",
+      "description": "Agent runs that execute commands or write files require a trusted workspace."
+    }
+  },
+  "contributes": {
+    "viewsContainers": {
+      "activitybar": [
+        {
+          "id": "openova",
+          "title": "Openova",
+          "icon": "media/nova.svg"
+        }
+      ]
+    },
+    "views": {
+      "openova": [
+        {
+          "type": "webview",
+          "id": "openova.chat",
+          "name": "Agent",
+          "icon": "media/nova.svg"
+        }
+      ]
+    },
+    "commands": [
+      {
+        "command": "openova.newAgent",
+        "title": "Openova: New Agent"
+      },
+      {
+        "command": "openova.focusChat",
+        "title": "Openova: Focus Chat"
+      }
+    ],
+    "keybindings": [
+      {
+        "command": "openova.focusChat",
+        "key": "ctrl+l",
+        "mac": "cmd+l"
+      }
+    ],
+    "configuration": {
+      "title": "Openova",
+      "properties": {
+        "openova.provider": {
+          "type": "string",
+          "enum": [
+            "anthropic",
+            "openai",
+            "openrouter",
+            "mistral",
+            "opencode",
+            "lmstudio",
+            "ollama",
+            "openai-compatible"
+          ],
+          "default": "ollama",
+          "description": "AI provider for chat and agent runs."
+        },
+        "openova.model": {
+          "type": "string",
+          "default": "",
+          "description": "Model id (discovered models are offered in the picker)."
+        },
+        "openova.reasoningEffort": {
+          "type": "string",
+          "enum": [
+            "off",
+            "low",
+            "medium",
+            "high",
+            "max"
+          ],
+          "default": "off",
+          "description": "Reasoning effort for models that support it (off disables thinking on local models)."
+        },
+        "openova.baseUrl": {
+          "type": "string",
+          "default": "",
+          "description": "Base URL override for the active provider."
+        }
+      }
+    }
+  },
+  "scripts": {
+    "compile": "gulp compile-extension:openova-agent",
+    "watch": "gulp watch-extension:openova-agent"
+  },
+  "repository": {
+    "type": "git",
+    "url": "https://github.com/wardenm4/vscode.git"
+  }
+}
