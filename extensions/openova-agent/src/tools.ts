@@ -19,8 +19,9 @@ export interface ToolHost {
 	root: string;
 	/** Commands the user allowed for the rest of this session. */
 	sessionAllowed: Set<string>;
-	/** Reports a file write so the UI can show diff badges later. */
-	onWrite?: (relPath: string, fullPath: string) => void;
+	/** Reports a file write for the run ledger (review bar / undo). `isNew`
+	 *  comes from a real existence check — never inferred from `before`. */
+	onWrite?: (info: { relPath: string; fullPath: string; existed: boolean; before: string; content: string }) => void;
 }
 
 function resolveInRoot(root: string, rel: string): string {
@@ -77,6 +78,9 @@ async function runShell(
 
 /** Ask the user to approve a command the gate didn't auto-allow. */
 async function approveCommand(host: ToolHost, cmd: string, dangerous: boolean): Promise<boolean> {
+	// Headless harness runs can't answer a modal — deny deterministically so
+	// verification never hangs (the model is told the user declined).
+	if (process.env.OPENOVA_DEV_TRIGGER) { return false; }
 	if (!dangerous && host.sessionAllowed.has('*')) { return true; }
 	const pick = await vscode.window.showWarningMessage(
 		`Openova agent wants to run${dangerous ? ' a potentially destructive command' : ''}:`,
@@ -145,8 +149,16 @@ export function createTools(host: ToolHost): AgentTools {
 
 		writeFile: async (rel, content) => {
 			const full = resolveInRoot(host.root, rel);
-			await vscode.workspace.fs.writeFile(vscode.Uri.file(full), new TextEncoder().encode(content));
-			host.onWrite?.(rel, full);
+			const uri = vscode.Uri.file(full);
+			let existed = true;
+			let before = '';
+			try {
+				before = new TextDecoder().decode(await vscode.workspace.fs.readFile(uri));
+			} catch {
+				existed = false;
+			}
+			await vscode.workspace.fs.writeFile(uri, new TextEncoder().encode(content));
+			host.onWrite?.({ relPath: rel, fullPath: full, existed, before, content });
 			// Surface any known problems for this file so the model can self-correct.
 			const probs = vscode.languages
 				.getDiagnostics(vscode.Uri.file(full))

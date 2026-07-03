@@ -4,13 +4,15 @@
  *--------------------------------------------------------------------------------------------*/
 
 // Openova Agent — built-in extension hosting the AI chat/agent sidebar.
-// The extension host owns sessions, provider streaming, the agent loop, and
-// the command permission gate (ported from the standalone Openova app); the
-// webview renders and sends user intents over a postMessage bridge.
+// The extension host owns sessions, provider streaming, the agent loop, the
+// run write-ledger (review bar / undo), queued follow-ups and the command
+// permission gate (all ported from the standalone Openova app); the webview
+// renders and sends user intents over a postMessage bridge.
 import * as vscode from 'vscode';
-import { runChat, abortRequest, listModels } from './lib/ai';
+import { runChat, complete, abortRequest, listModels } from './lib/ai';
 import { runAgent } from './lib/agent';
 import { providerInfo, PROVIDERS } from './lib/providers';
+import { lineDiff } from './lib/diff';
 import type { AIProvider } from './types';
 import { createTools, createCheck, ToolHost } from './tools';
 
@@ -22,11 +24,25 @@ interface UiStep {
 	detail?: string;
 }
 
+/** One file a run touched — a row in the post-run review bar. */
+interface WriteEntry {
+	path: string;
+	fullPath: string;
+	added: number;
+	removed: number;
+	/** Pre-run contents (first write wins); undefined = not kept (too large). */
+	before?: string;
+	/** True when the file did not exist before the run (undo = delete). */
+	isNew: boolean;
+}
+
 interface UiMessage {
 	id: string;
 	role: 'user' | 'assistant';
 	content: string;
 	steps?: UiStep[];
+	writes?: WriteEntry[];
+	reviewDismissed?: boolean;
 }
 
 interface Session {
@@ -35,12 +51,19 @@ interface Session {
 	messages: UiMessage[];
 }
 
+interface QueuedItem {
+	id: string;
+	text: string;
+	mode: 'ask' | 'agent';
+}
+
 interface RunState {
 	stop: boolean;
 	requestId: string | null;
 }
 
 const uid = (): string => Math.random().toString(36).slice(2);
+const MAX_BEFORE = 262_144;
 
 // Bring-up tracing for headless verification — writes only when the
 // OPENOVA_DEV_TRACE env var names a log file; inert otherwise.
@@ -79,29 +102,37 @@ export function activate(context: vscode.ExtensionContext): void {
 				const mode = params.get('mode') === 'ask' ? 'ask' : 'agent';
 				if (!text.trim()) { return; }
 				void vscode.commands.executeCommand('openova.chat.focus');
-				provider.startRun(text, mode);
+				void provider.startRun(text, mode);
 			}
 		})
 	);
 
 	// Headless bring-up harness: when OPENOVA_DEV_TRIGGER points at a JSON file
-	// ({"text","mode"}), consume it and run — lets CI/agents verify a real run
-	// without synthetic input. Env-gated; inert for normal users.
+	// ({"text","mode",("thenUndo")}), consume it and run — lets CI/agents verify
+	// real runs (and the undo path) without synthetic input. Env-gated.
 	const triggerPath = process.env.OPENOVA_DEV_TRIGGER;
 	if (triggerPath) {
 		setTimeout(() => {
-			try {
-				if (!fs.existsSync(triggerPath)) { return; }
-				const req = JSON.parse(fs.readFileSync(triggerPath, 'utf8')) as {
-					text?: string;
-					mode?: string;
-				};
-				fs.unlinkSync(triggerPath);
-				trace(`devTrigger ${JSON.stringify(req)}`);
-				if (req.text) { provider.startRun(req.text, req.mode === 'ask' ? 'ask' : 'agent'); }
-			} catch (e) {
-				trace(`devTrigger error ${e instanceof Error ? e.message : String(e)}`);
-			}
+			void (async () => {
+				try {
+					if (!fs.existsSync(triggerPath)) { return; }
+					const req = JSON.parse(fs.readFileSync(triggerPath, 'utf8')) as {
+						text?: string;
+						mode?: string;
+						thenUndo?: boolean;
+					};
+					fs.unlinkSync(triggerPath);
+					trace(`devTrigger ${JSON.stringify(req)}`);
+					if (!req.text) { return; }
+					await provider.startRun(req.text, req.mode === 'ask' ? 'ask' : 'agent');
+					if (req.thenUndo) {
+						const n = await provider.undoLastRun(true);
+						trace(`devUndo reverted=${n}`);
+					}
+				} catch (e) {
+					trace(`devTrigger error ${e instanceof Error ? e.message : String(e)}`);
+				}
+			})();
 		}, 3000);
 	}
 }
@@ -115,6 +146,7 @@ class OpenovaChatViewProvider implements vscode.WebviewViewProvider {
 	private sessions: Session[] = [];
 	private activeSession: string | null = null;
 	private readonly runs = new Map<string, RunState>();
+	private readonly queues = new Map<string, QueuedItem[]>();
 	private readonly sessionAllowed = new Set<string>();
 
 	constructor(private readonly context: vscode.ExtensionContext) {
@@ -138,15 +170,6 @@ class OpenovaChatViewProvider implements vscode.WebviewViewProvider {
 		this.postSessions();
 	}
 
-	/** Programmatic entry point (URI handler / commands): run in the active session. */
-	startRun(text: string, mode: 'ask' | 'agent'): void {
-		const sessionId = this.activeSession;
-		trace(`startRun mode=${mode} session=${sessionId} busy=${!!(sessionId && this.runs.get(sessionId))}`);
-		if (!sessionId || this.runs.get(sessionId)) { return; }
-		if (mode === 'agent') { void this.sendAgent(sessionId, text); }
-		else { void this.sendAsk(sessionId, text); }
-	}
-
 	private newSessionInternal(): void {
 		const existing = this.sessions.find((s) => s.messages.length === 0);
 		if (existing) {
@@ -159,9 +182,23 @@ class OpenovaChatViewProvider implements vscode.WebviewViewProvider {
 	}
 
 	private persist(): void {
-		// Cap history; drop transient run-only fields if any creep in.
+		// Strip pre-run snapshots and retire review bars in the PERSISTED copy —
+		// a stale Undo after reload could destroy newer work (same rule the
+		// standalone app ships). The in-memory session keeps the live bar.
+		const sanitized = this.sessions.slice(0, 40).map((s) => ({
+			...s,
+			messages: s.messages.map((m) =>
+				m.writes
+					? {
+						...m,
+						reviewDismissed: true,
+						writes: m.writes.map((w) => ({ ...w, before: undefined }))
+					}
+					: m
+			)
+		}));
 		void this.context.workspaceState.update('openova.sessions', {
-			sessions: this.sessions.slice(0, 40),
+			sessions: sanitized,
 			active: this.activeSession
 		});
 	}
@@ -172,6 +209,10 @@ class OpenovaChatViewProvider implements vscode.WebviewViewProvider {
 
 	private postSessions(): void {
 		this.post({ type: 'sessions', sessions: this.sessions, active: this.activeSession });
+	}
+
+	private postQueue(sessionId: string): void {
+		this.post({ type: 'queue', sessionId, items: this.queues.get(sessionId) ?? [] });
 	}
 
 	private settings(): { provider: AIProvider; model: string; effort: string; baseUrl: string } {
@@ -194,6 +235,28 @@ class OpenovaChatViewProvider implements vscode.WebviewViewProvider {
 		if (msg) { fn(msg); }
 	}
 
+	/** Programmatic entry point (URI handler / commands / dev harness). */
+	async startRun(text: string, mode: 'ask' | 'agent'): Promise<void> {
+		const sessionId = this.activeSession;
+		trace(`startRun mode=${mode} session=${sessionId} busy=${!!(sessionId && this.runs.get(sessionId))}`);
+		if (!sessionId || this.runs.get(sessionId)) { return; }
+		if (mode === 'agent') { await this.sendAgent(sessionId, text); }
+		else { await this.sendAsk(sessionId, text); }
+	}
+
+	/** Dev harness: undo the most recent run's writes (skips the confirm). */
+	async undoLastRun(skipConfirm: boolean): Promise<number> {
+		for (const sess of this.sessions) {
+			for (let i = sess.messages.length - 1; i >= 0; i--) {
+				const m = sess.messages[i];
+				if (m.writes?.length && !m.reviewDismissed) {
+					return this.undoWrites(sess.id, m.id, skipConfirm);
+				}
+			}
+		}
+		return 0;
+	}
+
 	// ---- webview ------------------------------------------------------------
 
 	resolveWebviewView(view: vscode.WebviewView): void {
@@ -211,14 +274,14 @@ class OpenovaChatViewProvider implements vscode.WebviewViewProvider {
 	private async onMessage(msg: Record<string, unknown>): Promise<void> {
 		switch (msg.type) {
 			case 'ready': {
-				const s = this.settings();
 				this.post({
 					type: 'init',
 					sessions: this.sessions,
 					active: this.activeSession,
-					settings: s,
+					settings: this.settings(),
 					workspace: vscode.workspace.workspaceFolders?.[0]?.name ?? null,
-					providers: Object.values(PROVIDERS).map((p) => ({ id: p.id, label: p.label }))
+					providers: Object.values(PROVIDERS).map((p) => ({ id: p.id, label: p.label })),
+					queue: this.activeSession ? (this.queues.get(this.activeSession) ?? []) : []
 				});
 				break;
 			}
@@ -229,10 +292,12 @@ class OpenovaChatViewProvider implements vscode.WebviewViewProvider {
 				this.activeSession = String(msg.id);
 				this.persist();
 				this.postSessions();
+				this.postQueue(String(msg.id));
 				break;
 			case 'deleteSession': {
 				const id = String(msg.id);
 				this.abort(id);
+				this.queues.delete(id);
 				this.sessions = this.sessions.filter((s) => s.id !== id);
 				if (this.sessions.length === 0) { this.newSessionInternal(); }
 				if (this.activeSession === id) { this.activeSession = this.sessions[0].id; }
@@ -243,16 +308,35 @@ class OpenovaChatViewProvider implements vscode.WebviewViewProvider {
 			case 'send': {
 				const sessionId = String(msg.sessionId ?? this.activeSession ?? '');
 				const text = String(msg.text ?? '').trim();
-				const mode = msg.mode === 'agent' ? 'agent' : 'ask';
+				const mode = msg.mode === 'ask' ? 'ask' : 'agent';
 				if (!text || !this.session(sessionId)) { return; }
-				if (this.runs.get(sessionId)) { return; } // one run per session
+				if (this.runs.get(sessionId)) {
+					// A run is streaming — queue the follow-up (dispatched at run end).
+					const q = this.queues.get(sessionId) ?? [];
+					q.push({ id: uid(), text, mode });
+					this.queues.set(sessionId, q);
+					this.postQueue(sessionId);
+					return;
+				}
 				if (mode === 'agent') { await this.sendAgent(sessionId, text); }
 				else { await this.sendAsk(sessionId, text); }
 				break;
 			}
-			case 'abort':
-				this.abort(String(msg.sessionId ?? this.activeSession ?? ''));
+			case 'cancelQueued': {
+				const sessionId = String(msg.sessionId ?? '');
+				const q = (this.queues.get(sessionId) ?? []).filter((x) => x.id !== String(msg.id));
+				this.queues.set(sessionId, q);
+				this.postQueue(sessionId);
 				break;
+			}
+			case 'abort': {
+				const sessionId = String(msg.sessionId ?? this.activeSession ?? '');
+				// Stop is an explicit stand-down — drop queued follow-ups too.
+				this.queues.set(sessionId, []);
+				this.postQueue(sessionId);
+				this.abort(sessionId);
+				break;
+			}
 			case 'setSettings': {
 				const cfg = vscode.workspace.getConfiguration('openova');
 				const patch = (msg.patch ?? {}) as Record<string, string>;
@@ -265,14 +349,36 @@ class OpenovaChatViewProvider implements vscode.WebviewViewProvider {
 				break;
 			}
 			case 'listModels': {
+				// Browse any provider's models (for the picker) without committing.
 				const s = this.settings();
-				const info = providerInfo(s.provider);
+				const p = (typeof msg.provider === 'string' ? msg.provider : s.provider) as AIProvider;
+				const info = providerInfo(p);
 				const r = await listModels({
 					kind: info.kind,
-					baseURL: s.baseUrl || info.baseURL,
+					baseURL: p === s.provider && s.baseUrl ? s.baseUrl : info.baseURL,
 					apiKey: undefined
 				});
-				this.post({ type: 'models', models: r.ok ? r.models : [], error: r.error });
+				this.post({ type: 'models', provider: p, models: r.ok ? r.models : [], error: r.error });
+				break;
+			}
+			case 'dismissReview':
+				this.mutateMsg(String(msg.sessionId), String(msg.msgId), (m) => {
+					m.reviewDismissed = true;
+				});
+				this.persist();
+				this.postSessions();
+				break;
+			case 'undoWrites':
+				await this.undoWrites(String(msg.sessionId), String(msg.msgId), false);
+				break;
+			case 'revertFile': {
+				const sess = this.session(String(msg.sessionId));
+				const m = sess?.messages.find((x) => x.id === String(msg.msgId));
+				const w = m?.writes?.find((x) => x.fullPath === String(msg.fullPath));
+				if (w && !w.isNew && w.before !== undefined) {
+					await this.restoreFile(w.fullPath, w.before);
+					void vscode.window.showInformationMessage(`Openova: reverted ${w.path}`);
+				}
 				break;
 			}
 		}
@@ -285,13 +391,156 @@ class OpenovaChatViewProvider implements vscode.WebviewViewProvider {
 		if (run.requestId) { abortRequest(run.requestId); }
 	}
 
+	// ---- review bar / undo ---------------------------------------------------
+
+	private async restoreFile(fullPath: string, content: string): Promise<boolean> {
+		const uri = vscode.Uri.file(fullPath);
+		// Never clobber unsaved editor changes.
+		const doc = vscode.workspace.textDocuments.find((d) => d.uri.fsPath === fullPath);
+		if (doc?.isDirty) { return false; }
+		await vscode.workspace.fs.writeFile(uri, new TextEncoder().encode(content));
+		return true;
+	}
+
+	private async undoWrites(sessionId: string, msgId: string, skipConfirm: boolean): Promise<number> {
+		const sess = this.session(sessionId);
+		const m = sess?.messages.find((x) => x.id === msgId);
+		const files = m?.writes ?? [];
+		if (!m || files.length === 0) { return 0; }
+		if (!skipConfirm) {
+			const pick = await vscode.window.showWarningMessage(
+				`Undo changes to ${files.length} file(s)?`,
+				{
+					modal: true,
+					detail:
+						'Modified files are restored to their pre-run contents; files the agent created are deleted. Unsaved editor changes are never overwritten.'
+				},
+				'Undo all'
+			);
+			if (pick !== 'Undo all') { return 0; }
+		}
+		let reverted = 0;
+		let skipped = 0;
+		for (const f of files) {
+			try {
+				if (f.isNew) {
+					const doc = vscode.workspace.textDocuments.find((d) => d.uri.fsPath === f.fullPath);
+					if (doc?.isDirty) { skipped++; continue; }
+					await vscode.workspace.fs.delete(vscode.Uri.file(f.fullPath), { useTrash: true });
+				} else if (f.before !== undefined) {
+					if (!(await this.restoreFile(f.fullPath, f.before))) { skipped++; continue; }
+				} else {
+					// Pre-existing file with no snapshot kept (>256KB): restoring is
+					// impossible and deleting would destroy user data. Leave it.
+					skipped++;
+					continue;
+				}
+				reverted++;
+			} catch {
+				/* keep going — report what we could revert */
+			}
+		}
+		m.reviewDismissed = true;
+		this.persist();
+		this.postSessions();
+		if (!skipConfirm) {
+			void vscode.window.showInformationMessage(
+				`Openova: reverted ${reverted}/${files.length} file(s)` +
+				(skipped ? ` — ${skipped} skipped` : '')
+			);
+		}
+		return reverted;
+	}
+
+	// ---- auto-title ----------------------------------------------------------
+
+	private autoTitle(sessionId: string): void {
+		const sess = this.session(sessionId);
+		if (!sess || sess.messages.length === 0) { return; }
+		const first = sess.messages.find((m) => m.role === 'user');
+		if (!first?.content.trim()) { return; }
+		const reply = sess.messages.find((m) => m.role === 'assistant' && m.content);
+		const prevTitle = sess.title;
+		const s = this.settings();
+		void (async () => {
+			try {
+				const out = await complete({
+					requestId: uid(),
+					provider: s.provider,
+					baseURL: s.baseUrl || undefined,
+					model: s.model,
+					system:
+						'You name coding chats. Reply with ONLY a concise 3-6 word title for the conversation. No quotes, no trailing punctuation, no explanations.',
+					messages: [
+						{
+							role: 'user',
+							content:
+								`User request:\n${first.content.slice(0, 600)}` +
+								(reply ? `\n\nAssistant answered:\n${reply.content.slice(0, 400)}` : '')
+						}
+					],
+					temperature: 0.3,
+					maxTokens: 2000,
+					reasoningEffort: 'off'
+				});
+				const title = (
+					out
+						.replace(/<think(?:ing)?>[\s\S]*?<\/think(?:ing)?>/gi, '')
+						.split('\n')
+						.map((l) => l.trim())
+						.filter(Boolean)
+						.pop() ?? ''
+				)
+					.replace(/^["'`#*\s]+|["'`.*\s]+$/g, '')
+					.slice(0, 60);
+				const cur = this.session(sessionId);
+				if (!title || !cur || cur.title !== prevTitle) { return; }
+				cur.title = title;
+				this.persist();
+				this.postSessions();
+			} catch {
+				/* best effort — the prefix title stays */
+			}
+		})();
+	}
+
+	// ---- run completion shared tail -------------------------------------------
+
+	private finishRun(sessionId: string, wasFirstTurn: boolean): void {
+		this.runs.delete(sessionId);
+		this.persist();
+		this.postSessions();
+		this.post({ type: 'running', sessionId, running: false });
+		if (wasFirstTurn) { this.autoTitle(sessionId); }
+		// Dispatch the next queued follow-up, skipping items that would
+		// early-return (which would silently stall the rest of the queue).
+		const q = this.queues.get(sessionId) ?? [];
+		let next: QueuedItem | undefined;
+		while (q.length) {
+			const head = q.shift()!;
+			if (head.mode === 'agent' && !vscode.workspace.workspaceFolders?.length) {
+				void vscode.window.showErrorMessage('Openova: skipped a queued agent message — no folder open.');
+				continue;
+			}
+			next = head;
+			break;
+		}
+		this.queues.set(sessionId, q);
+		this.postQueue(sessionId);
+		if (next) {
+			if (next.mode === 'agent') { void this.sendAgent(sessionId, next.text); }
+			else { void this.sendAsk(sessionId, next.text); }
+		}
+	}
+
 	// ---- ask mode -----------------------------------------------------------
 
 	private async sendAsk(sessionId: string, text: string): Promise<void> {
 		const sess = this.session(sessionId)!;
+		const wasFirstTurn = sess.messages.length === 0;
 		const userMsg: UiMessage = { id: uid(), role: 'user', content: text };
 		const reply: UiMessage = { id: uid(), role: 'assistant', content: '' };
-		if (sess.messages.length === 0) { sess.title = text.slice(0, 40); }
+		if (wasFirstTurn) { sess.title = text.slice(0, 40); }
 		sess.messages.push(userMsg, reply);
 		this.postSessions();
 		this.post({ type: 'running', sessionId, running: true });
@@ -328,10 +577,7 @@ class OpenovaChatViewProvider implements vscode.WebviewViewProvider {
 				m.content = clean || out.trim() || '(no reply)';
 			});
 		} finally {
-			this.runs.delete(sessionId);
-			this.persist();
-			this.postSessions();
-			this.post({ type: 'running', sessionId, running: false });
+			this.finishRun(sessionId, wasFirstTurn);
 		}
 	}
 
@@ -345,9 +591,15 @@ class OpenovaChatViewProvider implements vscode.WebviewViewProvider {
 			return;
 		}
 		const sess = this.session(sessionId)!;
+		const wasFirstTurn = sess.messages.length === 0;
 		const userMsg: UiMessage = { id: uid(), role: 'user', content: text };
 		const agentMsg: UiMessage = { id: uid(), role: 'assistant', content: '', steps: [] };
-		if (sess.messages.length === 0) { sess.title = text.slice(0, 40); }
+		if (wasFirstTurn) { sess.title = text.slice(0, 40); }
+		// A new run supersedes earlier review windows (undoing an old turn after
+		// this run writes would silently wipe newer work).
+		for (const m of sess.messages) {
+			if (m.writes?.length && !m.reviewDismissed) { m.reviewDismissed = true; }
+		}
 		sess.messages.push(userMsg, agentMsg);
 		this.postSessions();
 		this.post({ type: 'running', sessionId, running: true });
@@ -368,7 +620,29 @@ class OpenovaChatViewProvider implements vscode.WebviewViewProvider {
 		};
 		let currentToolId: string | null = null;
 
-		const host: ToolHost = { root, sessionAllowed: this.sessionAllowed };
+		// Run write-ledger: first write wins for existed/before; counts summed.
+		const writes = new Map<string, WriteEntry>();
+		const host: ToolHost = {
+			root,
+			sessionAllowed: this.sessionAllowed,
+			onWrite: ({ relPath, fullPath, existed, before, content }) => {
+				const d = lineDiff(before, content);
+				const led = writes.get(fullPath);
+				if (led) {
+					led.added += d.added;
+					led.removed += d.removed;
+				} else {
+					writes.set(fullPath, {
+						path: relPath,
+						fullPath,
+						added: d.added,
+						removed: d.removed,
+						before: existed && before.length <= MAX_BEFORE ? before : undefined,
+						isNew: !existed
+					});
+				}
+			}
+		};
 		const tools = createTools(host);
 		tools.check = createCheck(host);
 		const s = this.settings();
@@ -435,11 +709,11 @@ class OpenovaChatViewProvider implements vscode.WebviewViewProvider {
 				}
 			);
 		} finally {
-			this.runs.delete(sessionId);
+			this.mutateMsg(sessionId, agentMsg.id, (m) => {
+				if (writes.size) { m.writes = Array.from(writes.values()); }
+			});
 			this.post({ type: 'live', sessionId, msgId: agentMsg.id, text: '' });
-			this.persist();
-			this.postSessions();
-			this.post({ type: 'running', sessionId, running: false });
+			this.finishRun(sessionId, wasFirstTurn);
 		}
 	}
 

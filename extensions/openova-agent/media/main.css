@@ -279,3 +279,236 @@ body {
 	background: var(--vscode-errorForeground);
 	color: #fff;
 }
+
+/* model/provider/effort picker */
+.picker {
+	border: 1px solid var(--vscode-panel-border);
+	border-radius: 6px;
+	margin-top: 6px;
+	background: var(--vscode-dropdown-background);
+	overflow: hidden;
+}
+.picker .panes {
+	display: flex;
+	min-height: 0;
+}
+.picker .prov-pane {
+	width: 45%;
+	border-right: 1px solid var(--vscode-panel-border);
+	padding: 4px;
+	max-height: 220px;
+	overflow-y: auto;
+}
+.picker .pane-head {
+	font-size: 9.5px;
+	font-weight: 700;
+	letter-spacing: 0.5px;
+	text-transform: uppercase;
+	color: var(--vscode-descriptionForeground);
+	padding: 4px 6px 3px;
+}
+.picker .prov,
+.picker .mod {
+	display: block;
+	width: 100%;
+	text-align: left;
+	background: transparent;
+	border: none;
+	color: var(--vscode-foreground);
+	font-size: 11.5px;
+	padding: 4px 7px;
+	border-radius: 4px;
+	cursor: pointer;
+	overflow: hidden;
+	text-overflow: ellipsis;
+	white-space: nowrap;
+}
+.picker .prov:hover,
+.picker .mod:hover {
+	background: var(--vscode-list-hoverBackground);
+}
+.picker .prov.view {
+	background: var(--vscode-list-activeSelectionBackground);
+	color: var(--vscode-list-activeSelectionForeground, var(--vscode-foreground));
+}
+.picker .prov.current::after {
+	/* allow-any-unicode-next-line */
+	content: ' •';
+	color: var(--vscode-focusBorder);
+}
+.picker .mod.active {
+	font-weight: 700;
+}
+.picker .mod-pane {
+	flex: 1;
+	min-width: 0;
+	padding: 4px;
+}
+.picker .mod-list {
+	max-height: 190px;
+	overflow-y: auto;
+}
+.picker .mod-empty {
+	color: var(--vscode-descriptionForeground);
+	font-size: 11.5px;
+	padding: 6px;
+}
+.picker .effort {
+	display: flex;
+	align-items: center;
+	gap: 8px;
+	border-top: 1px solid var(--vscode-panel-border);
+	padding: 6px 8px;
+}
+.picker .seg {
+	display: flex;
+	flex: 1;
+	border: 1px solid var(--vscode-input-border, #444);
+	border-radius: 5px;
+	overflow: hidden;
+}
+.picker .seg button {
+	flex: 1;
+	border: none;
+	background: transparent;
+	color: var(--vscode-descriptionForeground);
+	font-size: 11px;
+	padding: 3px 0;
+	cursor: pointer;
+}
+.picker .seg button + button {
+	border-left: 1px solid var(--vscode-input-border, #444);
+}
+.picker .seg button.active {
+	background: var(--vscode-button-background);
+	color: var(--vscode-button-foreground);
+}
+
+/* review bar */
+.review {
+	margin-top: 6px;
+	border: 1px solid var(--vscode-panel-border);
+	border-radius: 6px;
+	overflow: hidden;
+}
+.review .rhead {
+	display: flex;
+	align-items: center;
+	gap: 6px;
+	padding: 5px 8px;
+	border-bottom: 1px solid var(--vscode-panel-border);
+	font-size: 12px;
+}
+.review .rsum {
+	flex: 1;
+	font-weight: 600;
+}
+.radd {
+	color: var(--vscode-charts-green, #89d185);
+	font-family: var(--vscode-editor-font-family);
+	font-size: 11px;
+}
+.rdel {
+	color: var(--vscode-errorForeground);
+	font-family: var(--vscode-editor-font-family);
+	font-size: 11px;
+}
+.review .rundo,
+.review .rkeep,
+.review .rrevert {
+	border: 1px solid var(--vscode-input-border, transparent);
+	background: transparent;
+	color: var(--vscode-descriptionForeground);
+	border-radius: 4px;
+	font-size: 11px;
+	padding: 2px 8px;
+	cursor: pointer;
+}
+.review .rkeep {
+	background: var(--vscode-button-background);
+	color: var(--vscode-button-foreground);
+	border-color: transparent;
+}
+.review .rundo:hover,
+.review .rrevert:hover {
+	background: var(--vscode-list-hoverBackground);
+	color: var(--vscode-foreground);
+}
+.review .rfiles {
+	padding: 3px;
+	max-height: 140px;
+	overflow-y: auto;
+}
+.review .rfile {
+	display: flex;
+	align-items: center;
+	gap: 7px;
+	padding: 3px 6px;
+	border-radius: 4px;
+	font-size: 12px;
+}
+.review .rfile:hover {
+	background: var(--vscode-list-hoverBackground);
+}
+.review .rname {
+	flex: 1;
+	min-width: 0;
+	overflow: hidden;
+	text-overflow: ellipsis;
+	white-space: nowrap;
+}
+.review .rnew {
+	font-size: 9.5px;
+	text-transform: uppercase;
+	border: 1px solid var(--vscode-focusBorder);
+	color: var(--vscode-focusBorder);
+	border-radius: 4px;
+	padding: 0 4px;
+}
+.review .rcounts {
+	display: inline-flex;
+	gap: 5px;
+	flex-shrink: 0;
+}
+.review .rrevert {
+	visibility: hidden;
+}
+.review .rfile:hover .rrevert {
+	visibility: visible;
+}
+
+/* queued follow-ups */
+.queued {
+	display: flex;
+	flex-wrap: wrap;
+	gap: 4px;
+	padding: 5px 8px 0;
+}
+.qchip {
+	display: inline-flex;
+	align-items: center;
+	gap: 5px;
+	border: 1px dashed var(--vscode-input-border, #555);
+	border-radius: 6px;
+	padding: 2px 7px;
+	font-size: 11px;
+	color: var(--vscode-descriptionForeground);
+	max-width: 100%;
+	overflow: hidden;
+	white-space: nowrap;
+}
+.qlabel {
+	font-size: 9px;
+	font-weight: 700;
+	text-transform: uppercase;
+	letter-spacing: 0.5px;
+	color: var(--vscode-focusBorder);
+}
+.qchip .x,
+.sessions .chip .x {
+	cursor: pointer;
+	opacity: 0.6;
+}
+.qchip .x:hover {
+	opacity: 1;
+}
