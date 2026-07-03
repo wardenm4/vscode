@@ -104,6 +104,22 @@
           "type": "string",
           "default": "",
           "description": "Optional command (typecheck/lint/test) the agent must pass before finishing."
+        },
+        "openova.mcpServers": {
+          "type": "array",
+          "default": [],
+          "description": "MCP servers available to the agent (stdio). Each entry: { \"name\": \"docs\", \"command\": \"npx some-mcp-server\" }.",
+          "items": {
+            "type": "object",
+            "properties": {
+              "name": {
+                "type": "string"
+              },
+              "command": {
+                "type": "string"
+              }
+            }
+          }
         }
       }
     }

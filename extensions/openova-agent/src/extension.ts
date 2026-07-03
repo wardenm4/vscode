@@ -15,6 +15,7 @@ import { providerInfo, PROVIDERS } from './lib/providers';
 import { lineDiff } from './lib/diff';
 import type { AIProvider } from './types';
 import { createTools, createCheck, ToolHost } from './tools';
+import { ensureMcp, callMcp, disposeMcp } from './mcp';
 
 interface UiStep {
 	id: string;
@@ -157,7 +158,9 @@ export function activate(context: vscode.ExtensionContext): void {
 }
 
 export function deactivate(): void {
-	// In-flight model requests die with the extension host process.
+	// In-flight model requests die with the extension host process; MCP server
+	// child processes need an explicit tree-kill.
+	disposeMcp();
 }
 
 class OpenovaChatViewProvider implements vscode.WebviewViewProvider {
@@ -812,6 +815,37 @@ class OpenovaChatViewProvider implements vscode.WebviewViewProvider {
 		};
 		const tools = createTools(host);
 		tools.check = createCheck(host);
+		// MCP: connect configured servers and expose their tools to this run.
+		const mcpServers = vscode.workspace
+			.getConfiguration('openova')
+			.get<{ name: string; command: string }[]>('mcpServers', []);
+		let mcpRules = '';
+		if (mcpServers.length) {
+			try {
+				const mcpTools = await ensureMcp(mcpServers);
+				if (mcpTools.length) {
+					mcpRules =
+						'These external MCP tools are available via ' +
+						'<tool name="mcp_call" server="SERVER" tool="TOOL">{"json":"args"}</tool>:\n' +
+						mcpTools.map((t) => `- ${t.server} / ${t.name}: ${t.description}`).join('\n');
+					tools.callMcp = async (server, tool, argsJson) => {
+						// Per-call approval (auto-approved under the dev harness — the
+						// user configured the server themselves).
+						if (!process.env.OPENOVA_DEV_TRIGGER) {
+							const pick = await vscode.window.showWarningMessage(
+								`Openova agent wants to call MCP tool "${tool}" on server "${server}":`,
+								{ modal: true, detail: argsJson },
+								'Allow'
+							);
+							if (pick !== 'Allow') { return { ok: false, output: 'The user declined this MCP call.' }; }
+						}
+						return callMcp(server, tool, argsJson);
+					};
+				}
+			} catch {
+				/* MCP is best-effort — the run proceeds without it */
+			}
+		}
 		if (opts.plan) {
 			const ref = opts.plan;
 			tools.updatePlan = (stepIndex) => {
@@ -845,7 +879,8 @@ class OpenovaChatViewProvider implements vscode.WebviewViewProvider {
 					provider: s.provider,
 					baseURL: s.baseUrl || undefined,
 					model: s.model,
-					maxTokens: 8192
+					maxTokens: 8192,
+					extraRules: mcpRules || undefined
 				},
 				{
 					onThought: (t) => addStep({ id: uid(), kind: 'thought', title: t, status: 'done' }),
