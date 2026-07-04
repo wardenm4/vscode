@@ -1,6 +1,9 @@
 {
 	"nameShort": "Openova",
 	"nameLong": "Openova",
+	"quality": "stable",
+	"updateUrl": "https://raw.githubusercontent.com/wardenm4/opencursor-releases/main/updates",
+	"downloadUrl": "https://github.com/wardenm4/opencursor-releases/releases",
 	"applicationName": "openova",
 	"dataFolderName": ".openova",
 	"sharedDataFolderName": ".openova-shared",

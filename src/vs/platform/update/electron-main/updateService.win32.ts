@@ -249,7 +249,9 @@ export class Win32UpdateService extends AbstractUpdateService implements IRelaun
 					return Promise.resolve(null);
 				}
 
-				if (!update || !update.url || !update.version || !update.productVersion) {
+				// A static feed always returns 200 — "no update" also means the
+				// manifest's version equals the commit we are already running.
+				if (!update || !update.url || !update.version || !update.productVersion || update.version === (pendingCommit ?? this.productService.commit)) {
 					// If we were checking for an overwrite update and found nothing newer,
 					// restore the Ready state with the pending update
 					if (this.state.type === StateType.Overwriting) {

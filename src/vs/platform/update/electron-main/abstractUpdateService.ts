@@ -30,16 +30,12 @@ export interface IUpdateURLOptions {
 	readonly internalOrg?: string;
 }
 
-export function createUpdateURL(baseUpdateUrl: string, platform: string, quality: string, commit: string, options?: IUpdateURLOptions): string {
-	const url = new URL(`${baseUpdateUrl}/api/update/${platform}/${quality}/${commit}`);
-
-	if (options?.background) {
-		url.searchParams.set('bg', 'true');
-	}
-
-	url.searchParams.set('u', options?.internalOrg ?? 'none');
-
-	return url.toString();
+export function createUpdateURL(baseUpdateUrl: string, platform: string, quality: string, _commit: string, _options?: IUpdateURLOptions): string {
+	// Openova: updates are served from a STATIC feed (a latest.json checked in
+	// to the public releases repo) rather than a dynamic update server. The
+	// client compares the manifest's `version` against its own commit to decide
+	// whether the update applies (see the platform update services).
+	return new URL(`${baseUpdateUrl}/${quality}/${platform}/latest.json`).toString();
 }
 
 /**

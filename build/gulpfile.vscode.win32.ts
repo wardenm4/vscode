@@ -111,7 +111,9 @@ function buildWin32Setup(arch: string, target: string): task.CallbackTask {
 			Quality: quality
 		};
 
-		if (quality === 'stable' || quality === 'insider') {
+		// Openova ships no appx explorer-command package — only add these
+		// definitions when the payload actually exists (code.iss references it).
+		if ((quality === 'stable' || quality === 'insider') && fs.existsSync(path.join(sourcePath, 'appx'))) {
 			definitions['AppxPackage'] = `${quality === 'stable' ? 'code' : 'code_insider'}_${arch}.appx`;
 			definitions['AppxPackageDll'] = `${quality === 'stable' ? 'code' : 'code_insider'}_explorer_command_${arch}.dll`;
 			definitions['AppxPackageName'] = `${product.win32AppUserModelId}`;

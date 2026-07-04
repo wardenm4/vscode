@@ -56,7 +56,8 @@ export class LinuxUpdateService extends AbstractUpdateService {
 					return;
 				}
 
-				if (!update || !update.url || !update.version || !update.productVersion) {
+				// Static feed: equal version means we're already current.
+				if (!update || !update.url || !update.version || !update.productVersion || update.version === this.productService.commit) {
 					this.setState(State.Idle(UpdateType.Archive, undefined, explicit || undefined));
 				} else {
 					this.setState(State.AvailableForDownload(update));
