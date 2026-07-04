@@ -673,43 +673,44 @@
 		repoWrap.appendChild(repo);
 		if (repoMenuOpen) {
 			const menu = el('div', 'repo-menu');
+			menu.appendChild(el('div', 'rm-head', 'Recents'));
 			for (const r of repos) {
-				const row = el('button', 'rm-row' + (r.path === repoCurrent ? ' current' : ''));
+				const isCur = r.path === repoCurrent;
+				const row = el('button', 'rm-row' + (isCur ? ' current' : ''));
 				row.appendChild(icon(ICONS.folder, 12));
 				const meta = el('span', 'rm-meta');
-				meta.appendChild(el('span', 'rm-name', r.name));
-				meta.appendChild(el('span', 'rm-path', r.path));
+				meta.appendChild(el('span', 'rm-name', r.path));
 				row.appendChild(meta);
+				if (isCur) {
+					// allow-any-unicode-next-line
+					row.appendChild(el('span', 'rm-check', '✓'));
+				}
 				row.onclick = () => {
 					repoMenuOpen = false;
-					if (r.path !== repoCurrent) {
+					if (!isCur) {
 						vscode.postMessage({ type: 'openRepoFolder', path: r.path });
 					}
 					render();
 				};
 				menu.appendChild(row);
 			}
-			if (repos.length) { menu.appendChild(el('div', 'rm-sep')); }
-			const browse = el('button', 'rm-row');
-			browse.appendChild(el('span', 'rm-plus', '+'));
-			// allow-any-unicode-next-line
-			browse.appendChild(el('span', 'rm-name', 'Open folder…'));
-			browse.onclick = () => {
-				repoMenuOpen = false;
-				vscode.postMessage({ type: 'pickFolder' });
-				render();
+			if (!repos.length) { menu.appendChild(el('div', 'rm-empty', 'Nothing yet')); }
+			menu.appendChild(el('div', 'rm-sep'));
+			const action = (label, msg) => {
+				const b = el('button', 'rm-row');
+				b.appendChild(icon(ICONS.folder, 12));
+				b.appendChild(el('span', 'rm-name', label));
+				b.onclick = () => {
+					repoMenuOpen = false;
+					vscode.postMessage(msg);
+					render();
+				};
+				menu.appendChild(b);
 			};
-			menu.appendChild(browse);
-			const recent = el('button', 'rm-row');
-			recent.appendChild(el('span', 'rm-plus', ''));
 			// allow-any-unicode-next-line
-			recent.appendChild(el('span', 'rm-name', 'Open recent…'));
-			recent.onclick = () => {
-				repoMenuOpen = false;
-				vscode.postMessage({ type: 'openRepo' });
-				render();
-			};
-			menu.appendChild(recent);
+			action('Open Folder…', { type: 'pickFolder' });
+			// allow-any-unicode-next-line
+			action('Open Recent…', { type: 'openRepo' });
 			repoWrap.appendChild(menu);
 		}
 		where.appendChild(repoWrap);
