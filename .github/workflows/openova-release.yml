@@ -1,0 +1,84 @@
+name: Openova Release
+
+# Builds the Windows x64 archive + user-setup installer for a tagged release.
+# Trigger: push a tag like openova-v1.128.0-alpha.3 (from the openova-base
+# lineage), or run manually from the Actions tab.
+#
+# NOTE: first cloud run may need iteration — the Spectre-mitigated MSVC libs
+# step mirrors what the local build required (MSB8040 without them).
+
+on:
+  push:
+    tags:
+      - 'openova-v*'
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+jobs:
+  windows-x64:
+    runs-on: windows-2022
+    timeout-minutes: 150
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 24.x
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+
+      - name: Install Spectre-mitigated MSVC libs (required by native deps)
+        shell: pwsh
+        run: |
+          $vs = 'C:\Program Files\Microsoft Visual Studio\2022\Enterprise'
+          $installer = 'C:\Program Files (x86)\Microsoft Visual Studio\Installer\vs_installer.exe'
+          $proc = Start-Process -FilePath $installer -ArgumentList @(
+            'modify', '--installPath', "`"$vs`"",
+            '--add', 'Microsoft.VisualStudio.Component.VC.Runtimes.x86.x64.Spectre',
+            '--add', 'Microsoft.VisualStudio.Component.VC.ATL.Spectre',
+            '--add', 'Microsoft.VisualStudio.Component.VC.ATLMFC.Spectre',
+            '--quiet', '--norestart', '--nocache'
+          ) -Wait -PassThru
+          if ($proc.ExitCode -ne 0 -and $proc.ExitCode -ne 3010) {
+            throw "vs_installer exited with $($proc.ExitCode)"
+          }
+
+      - name: Install dependencies
+        shell: pwsh
+        env:
+          VSCODE_SKIP_NODE_VERSION_CHECK: '1'
+          npm_config_arch: x64
+          npm_config_msvs_version: '2022'
+        run: npm ci
+
+      - name: Build (minified)
+        shell: pwsh
+        run: npm run gulp vscode-win32-x64-min
+
+      - name: Build installer
+        shell: pwsh
+        run: |
+          npm run gulp vscode-win32-x64-inno-updater
+          npm run gulp vscode-win32-x64-user-setup
+
+      - name: Package archive
+        shell: pwsh
+        run: |
+          $version = "${{ github.ref_name }}" -replace '^openova-v', ''
+          Compress-Archive -Path "$env:GITHUB_WORKSPACE\..\VSCode-win32-x64\*" `
+            -DestinationPath "$env:GITHUB_WORKSPACE\Openova-win32-x64-$version.zip"
+          Copy-Item "$env:GITHUB_WORKSPACE\.build\win32-x64\user-setup\OpenovaSetup.exe" `
+            "$env:GITHUB_WORKSPACE\OpenovaUserSetup-x64-$version.exe"
+
+      - name: Publish release
+        uses: softprops/action-gh-release@v2
+        if: startsWith(github.ref, 'refs/tags/')
+        with:
+          prerelease: true
+          files: |
+            Openova-win32-x64-*.zip
+            OpenovaUserSetup-x64-*.exe
