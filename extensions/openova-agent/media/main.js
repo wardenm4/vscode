@@ -538,7 +538,14 @@
 	const THEMES = [
 		{ name: 'Openova Dark', tb: '#17171d', sb: '#1b1b22', ed: '#141419', btn: '#7c6cf0', fg: '#e8e8ee', line: '#2c2c38' },
 		{ name: 'Openova Midnight', tb: '#0b0e1a', sb: '#0e1220', ed: '#090c16', btn: '#2f6fe0', fg: '#dfe4f2', line: '#1d2438' },
-		{ name: 'Openova Light', tb: '#f4f3f8', sb: '#f8f7fb', ed: '#ffffff', btn: '#6a5ae0', fg: '#2a2a33', line: '#e2e0ec' }
+		{ name: 'Openova Light', tb: '#f4f3f8', sb: '#f8f7fb', ed: '#ffffff', btn: '#6a5ae0', fg: '#2a2a33', line: '#e2e0ec' },
+		{ name: 'Openova Nebula', tb: '#191122', sb: '#1e1529', ed: '#140e1c', btn: '#a06bff', fg: '#e4dcf2', line: '#332347' },
+		{ name: 'Openova Ocean', tb: '#0d181c', sb: '#101d22', ed: '#0a1418', btn: '#14b8a6', fg: '#d8e8e8', line: '#1e343c' },
+		{ name: 'Openova Forest', tb: '#101711', sb: '#131b14', ed: '#0c120d', btn: '#3fb950', fg: '#d9e5da', line: '#263628' },
+		{ name: 'Openova Ember', tb: '#1b1512', sb: '#201915', ed: '#16110e', btn: '#f2762b', fg: '#ece2d8', line: '#3b2d23' },
+		// allow-any-unicode-next-line
+		{ name: 'Openova Rosé', tb: '#1c1219', sb: '#22161e', ed: '#150d12', btn: '#ec4899', fg: '#f0dce6', line: '#3d2532' },
+		{ name: 'Openova Graphite', tb: '#161616', sb: '#1a1a1a', ed: '#111111', btn: '#6e7681', fg: '#e0e0e0', line: '#2e2e2e' }
 	];
 
 	function renderCustomize(main) {

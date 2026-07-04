@@ -27,6 +27,36 @@
         "label": "Openova Light",
         "uiTheme": "vs",
         "path": "./themes/openova-light.json"
+      },
+      {
+        "label": "Openova Nebula",
+        "uiTheme": "vs-dark",
+        "path": "./themes/openova-nebula.json"
+      },
+      {
+        "label": "Openova Ocean",
+        "uiTheme": "vs-dark",
+        "path": "./themes/openova-ocean.json"
+      },
+      {
+        "label": "Openova Forest",
+        "uiTheme": "vs-dark",
+        "path": "./themes/openova-forest.json"
+      },
+      {
+        "label": "Openova Ember",
+        "uiTheme": "vs-dark",
+        "path": "./themes/openova-ember.json"
+      },
+      {
+        "label": "Openova Rosé",
+        "uiTheme": "vs-dark",
+        "path": "./themes/openova-rose.json"
+      },
+      {
+        "label": "Openova Graphite",
+        "uiTheme": "vs-dark",
+        "path": "./themes/openova-graphite.json"
       }
     ]
   },
