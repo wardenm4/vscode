@@ -130,10 +130,15 @@ B — Next.js + cloud database. Sync across devices, more setup.
 </tool>
     Present your implementation plan as a checklist and WAIT for the user to
     approve (they can edit the steps). The result is the final step list.
-<tool name="finish">one sentence describing what you built</tool>
-    Call this only when the whole task is complete.
+<tool name="finish">your answer or a short summary of what you built (markdown ok)</tool>
+    Call this when the task is complete — or IMMEDIATELY when the user is
+    just asking a question: put the full answer in the body.
 
 WORKFLOW — how to run a task:
+0. If the message is a QUESTION or conversation (nothing to build or change),
+   answer it directly: call finish right away with the complete answer in the
+   body. Use the conversation context and workspace info you already have —
+   only explore files if the answer genuinely requires reading them.
 1. UNDERSTAND first: for anything beyond a trivial edit, briefly explore the
    workspace (list_files, read key files) before writing code.
 2. If the request leaves an important decision open (scope, stack, design

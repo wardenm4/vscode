@@ -1630,9 +1630,25 @@ class OpenovaChatViewProvider implements vscode.WebviewViewProvider {
 			}
 		};
 
+		// Ground the model in its environment — without this it cannot answer
+		// even "where is the file?" (it has no idea what the workspace path is).
+		const envRules =
+			`Environment:\n- Workspace root (absolute): ${root}\n- OS: ${process.platform === 'win32' ? 'Windows' : process.platform}\n` +
+			`- All relative paths are under the workspace root. When the user asks where something is, give the full absolute path.`;
+
+		// Conversation continuity: recent turns (user text + assistant summaries)
+		// so follow-ups like "is it done?" don't start from amnesia.
+		const priorTurns = sess.messages
+			.filter((m) => m.id !== userMsg.id && m.id !== agentMsg.id && m.content?.trim())
+			.slice(-6)
+			.map((m) => `${m.role === 'user' ? 'User' : 'You'}: ${m.content.slice(0, 500)}`);
+		const taskWithContext = priorTurns.length
+			? `Conversation so far:\n${priorTurns.join('\n')}\n\n---\nCurrent request: ${text}`
+			: text;
+
 		try {
 			await runAgent(
-				text,
+				taskWithContext,
 				tools,
 				{
 					provider: s.provider,
@@ -1640,7 +1656,7 @@ class OpenovaChatViewProvider implements vscode.WebviewViewProvider {
 					apiKey: await getApiKey(s.provider),
 					model: s.model,
 					maxTokens: 8192,
-					extraRules: mcpRules || undefined
+					extraRules: [envRules, mcpRules].filter(Boolean).join('\n\n') || undefined
 				},
 				{
 					onThought: (t) => addStep({ id: uid(), kind: 'thought', title: t, status: 'done' }),
@@ -1659,6 +1675,7 @@ class OpenovaChatViewProvider implements vscode.WebviewViewProvider {
 						}
 					},
 					onFinish: (summary) => {
+						trace(`finish: ${summary.slice(0, 300).replace(/\n/g, ' | ')}`);
 						addStep({ id: uid(), kind: 'finish', title: summary, status: 'done' });
 						this.mutateMsg(sessionId, agentMsg.id, (m) => {
 							m.content = summary;
