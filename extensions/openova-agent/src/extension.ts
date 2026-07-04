@@ -73,6 +73,15 @@ interface QueuedItem {
 	mode: 'ask' | 'agent' | 'plan';
 }
 
+interface Automation {
+	id: string;
+	name: string;
+	prompt: string;
+	everyMinutes: number;
+	enabled: boolean;
+	lastRun?: number;
+}
+
 interface RunState {
 	stop: boolean;
 	requestId: string | null;
@@ -98,6 +107,9 @@ export function activate(context: vscode.ExtensionContext): void {
 	trace('activate');
 	const provider = new OpenovaChatViewProvider(context);
 	registerTabCompletions(context);
+	// Automations scheduler: a minute tick runs whatever is due.
+	const automationTimer = setInterval(() => void provider.tickAutomations(), 60_000);
+	context.subscriptions.push({ dispose: () => clearInterval(automationTimer) });
 	context.subscriptions.push(
 		vscode.window.registerWebviewViewProvider('openova.chat', provider, {
 			webviewOptions: { retainContextWhenHidden: true }
@@ -230,14 +242,32 @@ export function activate(context: vscode.ExtensionContext): void {
 						inline?: { file: string; startLine: number; endLine: number; instruction: string };
 						completion?: { file: string; line: number; col: number };
 						agentsWindow?: boolean;
+						showView?: string;
+						automation?: { name: string; prompt: string; everyMinutes?: number; run?: boolean };
 					};
 					fs.unlinkSync(triggerPath);
 					trace(`devTrigger ${JSON.stringify(req)}`);
+					if (req.showView) {
+						provider.pendingView = String(req.showView);
+					}
 					if (req.agentsWindow) {
 						await provider.openAgentsWindow();
 						trace('devAgentsWindow opened');
-						if (!req.text) { return; }
 					}
+					if (req.automation) {
+						provider.saveAutomation({
+							name: req.automation.name,
+							prompt: req.automation.prompt,
+							everyMinutes: req.automation.everyMinutes ?? 60
+						});
+						const created = provider.getAutomations().find((a) => a.name === req.automation?.name);
+						if (created && req.automation.run !== false) {
+							await provider.runAutomation(created.id);
+						}
+						trace('devAutomation done');
+						return;
+					}
+					if (req.agentsWindow && !req.text) { return; }
 					if (req.completion) {
 						const doc = await vscode.workspace.openTextDocument(req.completion.file);
 						const text = await completeAtPosition(
@@ -295,6 +325,9 @@ class OpenovaChatViewProvider implements vscode.WebviewViewProvider {
 	private readonly runs = new Map<string, RunState>();
 	private readonly queues = new Map<string, QueuedItem[]>();
 	private readonly sessionAllowed = new Set<string>();
+	private automations: Automation[] = [];
+	/** One-shot view hint for the next webview init (dev harness). */
+	pendingView: string | null = null;
 
 	constructor(private readonly context: vscode.ExtensionContext) {
 		const saved = context.workspaceState.get<{ sessions: Session[]; active: string | null }>(
@@ -306,6 +339,69 @@ class OpenovaChatViewProvider implements vscode.WebviewViewProvider {
 		}
 		if (this.sessions.length === 0) {
 			this.newSessionInternal();
+		}
+		this.automations = context.workspaceState.get<Automation[]>('openova.automations', []);
+	}
+
+	// ---- automations ----------------------------------------------------------
+
+	private persistAutomations(): void {
+		void this.context.workspaceState.update('openova.automations', this.automations);
+		this.post({ type: 'automations', items: this.automations });
+	}
+
+	saveAutomation(item: Partial<Automation>): void {
+		const existing = item.id ? this.automations.find((a) => a.id === item.id) : undefined;
+		if (existing) {
+			Object.assign(existing, item);
+		} else {
+			this.automations.push({
+				id: uid(),
+				name: String(item.name || 'Automation').slice(0, 60),
+				prompt: String(item.prompt || ''),
+				everyMinutes: Math.max(5, Number(item.everyMinutes) || 60),
+				enabled: item.enabled !== false
+			});
+		}
+		this.persistAutomations();
+	}
+
+	deleteAutomation(id: string): void {
+		this.automations = this.automations.filter((a) => a.id !== id);
+		this.persistAutomations();
+	}
+
+	getAutomations(): Automation[] {
+		return this.automations;
+	}
+
+	/** Run one automation now, in a fresh session titled after it. */
+	async runAutomation(id: string): Promise<void> {
+		const a = this.automations.find((x) => x.id === id);
+		if (!a || !a.prompt) { return; }
+		a.lastRun = Date.now();
+		this.persistAutomations();
+		this.newSessionInternal();
+		this.postSessions();
+		const sessionId = this.activeSession;
+		trace(`automation run ${a.name}`);
+		await this.startRun(a.prompt, 'agent', []);
+		const sess = sessionId ? this.session(sessionId) : undefined;
+		if (sess) {
+			sess.title = ('Auto: ' + a.name).slice(0, 40);
+			this.persist();
+			this.postSessions();
+		}
+	}
+
+	/** Minute tick: run whatever is due, one at a time, never over a live run. */
+	async tickAutomations(): Promise<void> {
+		if (this.runs.size) { return; }
+		for (const a of this.automations) {
+			if (!a.enabled || !a.prompt) { continue; }
+			if (a.lastRun && Date.now() - a.lastRun < a.everyMinutes * 60_000) { continue; }
+			await this.runAutomation(a.id);
+			return;
 		}
 	}
 
@@ -533,10 +629,22 @@ class OpenovaChatViewProvider implements vscode.WebviewViewProvider {
 					settings: this.settings(),
 					workspace: vscode.workspace.workspaceFolders?.[0]?.name ?? null,
 					providers: Object.values(PROVIDERS).map((p) => ({ id: p.id, label: p.label })),
-					queue: this.activeSession ? (this.queues.get(this.activeSession) ?? []) : []
+					queue: this.activeSession ? (this.queues.get(this.activeSession) ?? []) : [],
+					automations: this.automations,
+					view: this.pendingView
 				});
+				this.pendingView = null;
 				break;
 			}
+			case 'automationSave':
+				this.saveAutomation((msg.item ?? {}) as Partial<Automation>);
+				break;
+			case 'automationDelete':
+				this.deleteAutomation(String(msg.id));
+				break;
+			case 'automationRun':
+				void this.runAutomation(String(msg.id));
+				break;
 			case 'newSession':
 				this.newSession();
 				break;

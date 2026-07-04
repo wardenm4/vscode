@@ -18,6 +18,7 @@
 	let liveMsgId = null;
 	let queue = [];
 	let draft = '';
+	let automations = [];
 	// window-mode navigation
 	let view = 'chat'; // 'chat' | 'automations'
 	let sidebarSearch = null; // null = closed, string = filter
@@ -394,21 +395,98 @@
 		if (!pickerOpen) { setTimeout(() => ta.focus(), 0); }
 	}
 
+	const INTERVALS = [
+		[15, 'Every 15 min'],
+		[30, 'Every 30 min'],
+		[60, 'Every hour'],
+		[240, 'Every 4 hours'],
+		[1440, 'Daily']
+	];
+
 	function renderAutomations(main) {
 		const pane = el('div', 'autom');
-		const box = el('div', 'autom-box');
-		const big = el('div', 'autom-icon');
-		big.appendChild(icon(ICONS.clock, 28));
-		box.appendChild(big);
-		box.appendChild(el('div', 'autom-title', 'Automations'));
-		box.appendChild(
+		const col = el('div', 'autom-col');
+		col.appendChild(el('div', 'autom-title', 'Automations'));
+		col.appendChild(
 			el(
 				'div',
 				'autom-sub',
-				'Run agents on a schedule or in response to events — nightly test triage, dependency bumps, issue-to-PR runs. Coming soon.'
+				'Recurring agent runs in this repository — nightly test triage, dependency audits, doc sweeps. Each run opens as a new agent session.'
 			)
 		);
-		pane.appendChild(box);
+
+		if (automations.length) {
+			const list = el('div', 'autom-list');
+			for (const a of automations) {
+				const row = el('div', 'autom-row' + (a.enabled ? '' : ' off'));
+				const toggle = document.createElement('input');
+				toggle.type = 'checkbox';
+				toggle.checked = !!a.enabled;
+				toggle.title = a.enabled ? 'Disable' : 'Enable';
+				toggle.onchange = () =>
+					vscode.postMessage({ type: 'automationSave', item: { id: a.id, enabled: toggle.checked } });
+				row.appendChild(toggle);
+				const meta = el('div', 'autom-meta');
+				meta.appendChild(el('div', 'autom-name', a.name));
+				const cadence = (INTERVALS.find((x) => x[0] === a.everyMinutes) || [0, 'Every ' + a.everyMinutes + ' min'])[1];
+				meta.appendChild(
+					el('div', 'autom-when', cadence + (a.lastRun ? '  ·  last run ' + age(a.lastRun) + ' ago' : '  ·  never run'))
+				);
+				row.appendChild(meta);
+				const run = el('button', 'autom-run', running ? 'Busy…' : 'Run now');
+				run.disabled = running;
+				run.onclick = () => {
+					view = 'chat';
+					vscode.postMessage({ type: 'automationRun', id: a.id });
+				};
+				row.appendChild(run);
+				// allow-any-unicode-next-line
+				const del = el('button', 'autom-del', '✕');
+				del.title = 'Delete automation';
+				del.onclick = () => vscode.postMessage({ type: 'automationDelete', id: a.id });
+				row.appendChild(del);
+				row.title = a.prompt;
+				list.appendChild(row);
+			}
+			col.appendChild(list);
+		}
+
+		// new-automation form
+		const form = el('div', 'autom-form');
+		form.appendChild(el('div', 'autom-form-head', 'New automation'));
+		const name = document.createElement('input');
+		name.placeholder = 'Name — e.g. Nightly test triage';
+		form.appendChild(name);
+		const prompt = document.createElement('textarea');
+		prompt.placeholder = 'What should the agent do each run?';
+		prompt.rows = 3;
+		form.appendChild(prompt);
+		const foot = el('div', 'autom-form-foot');
+		const interval = document.createElement('select');
+		for (const [v, label] of INTERVALS) {
+			const o = document.createElement('option');
+			o.value = String(v);
+			o.textContent = label;
+			interval.appendChild(o);
+		}
+		interval.value = '60';
+		foot.appendChild(interval);
+		foot.appendChild(el('span', 'spacer'));
+		const save = el('button', 'autom-save', 'Create');
+		save.onclick = () => {
+			if (!name.value.trim() || !prompt.value.trim()) { return; }
+			vscode.postMessage({
+				type: 'automationSave',
+				item: { name: name.value.trim(), prompt: prompt.value.trim(), everyMinutes: Number(interval.value) }
+			});
+			name.value = '';
+			prompt.value = '';
+		};
+		foot.appendChild(save);
+		form.appendChild(foot);
+		col.appendChild(form);
+
+		pane.appendChild(col);
 		main.appendChild(pane);
 	}
 
@@ -787,6 +865,12 @@
 				providers = m.providers || [];
 				workspace = m.workspace;
 				queue = m.queue || [];
+				automations = m.automations || [];
+				if (m.view) { view = m.view; }
+				render();
+				break;
+			case 'automations':
+				automations = m.items || [];
 				render();
 				break;
 			case 'sessions':
