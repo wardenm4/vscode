@@ -149,6 +149,7 @@ export function activate(context: vscode.ExtensionContext): void {
 	// Automations scheduler: a minute tick runs whatever is due.
 	const automationTimer = setInterval(() => void provider.tickAutomations(), 60_000);
 	context.subscriptions.push({ dispose: () => clearInterval(automationTimer) });
+	context.subscriptions.push({ dispose: () => provider.killTerm() });
 	context.subscriptions.push(
 		vscode.window.registerWebviewViewProvider('openova.chat', provider, {
 			webviewOptions: { retainContextWhenHidden: true }
@@ -372,6 +373,8 @@ class OpenovaChatViewProvider implements vscode.WebviewViewProvider {
 	private readonly sessionAllowed = new Set<string>();
 	/** Resolvers for runs paused at their step budget (sessionId → grant more?). */
 	private readonly pauseResolvers = new Map<string, (more: boolean) => void>();
+	/** Shell backing the Agents window Terminal pane. */
+	private term: cp.ChildProcessWithoutNullStreams | undefined;
 	private automations: Automation[] = [];
 	/** One-shot view hint for the next webview init (dev harness). */
 	pendingView: string | null = null;
@@ -426,6 +429,41 @@ class OpenovaChatViewProvider implements vscode.WebviewViewProvider {
 
 	postView(view: string): void {
 		this.post({ type: 'showView', view });
+	}
+
+	// ---- terminal pane (Agents window) ----------------------------------------
+
+	private ensureTerm(): void {
+		if (this.term) { return; }
+		const root = vscode.workspace.workspaceFolders?.[0]?.uri.fsPath ?? os.homedir();
+		const exe = process.platform === 'win32' ? 'powershell.exe' : process.env.SHELL || '/bin/bash';
+		const args = process.platform === 'win32' ? ['-NoLogo'] : [];
+		try {
+			const child = cp.spawn(exe, args, { cwd: root, windowsHide: true });
+			child.stdout.on('data', (d: Buffer) => this.post({ type: 'termData', data: d.toString() }));
+			child.stderr.on('data', (d: Buffer) => this.post({ type: 'termData', data: d.toString() }));
+			child.on('exit', (code) => {
+				this.post({ type: 'termData', data: `\n[shell exited (${code ?? 'killed'}) — press Enter to restart]\n` });
+				this.term = undefined;
+			});
+			child.on('error', (e) => {
+				this.post({ type: 'termData', data: `\n[failed to start shell: ${e.message}]\n` });
+				this.term = undefined;
+			});
+			this.term = child;
+			this.post({ type: 'termData', data: `[${exe} @ ${root}]\n` });
+		} catch (e) {
+			this.post({ type: 'termData', data: `[failed to start shell: ${e instanceof Error ? e.message : String(e)}]\n` });
+		}
+	}
+
+	killTerm(): void {
+		try {
+			this.term?.kill();
+		} catch {
+			/* already gone */
+		}
+		this.term = undefined;
 	}
 
 	private postRepos(): void {
@@ -746,6 +784,45 @@ class OpenovaChatViewProvider implements vscode.WebviewViewProvider {
 					view: this.pendingView
 				});
 				this.pendingView = null;
+				break;
+			}
+			case 'termStart':
+				this.ensureTerm();
+				break;
+			case 'termInput':
+				this.ensureTerm();
+				try {
+					this.term?.stdin.write(String(msg.data ?? '') + '\n');
+				} catch {
+					/* shell died mid-write; the exit handler resets it */
+				}
+				break;
+			case 'readFileContent': {
+				const rel = String(msg.path ?? '');
+				const root = vscode.workspace.workspaceFolders?.[0]?.uri;
+				if (!rel || !root) { break; }
+				try {
+					const bytes = await vscode.workspace.fs.readFile(vscode.Uri.joinPath(root, rel));
+					this.post({
+						type: 'fileContent',
+						path: rel,
+						content: new TextDecoder().decode(bytes.slice(0, 200_000))
+					});
+				} catch (e) {
+					this.post({
+						type: 'fileContent',
+						path: rel,
+						content: `(couldn't read ${rel}: ${e instanceof Error ? e.message : String(e)})`
+					});
+				}
+				break;
+			}
+			case 'openInEditor': {
+				const rel = String(msg.path ?? '');
+				const root = vscode.workspace.workspaceFolders?.[0]?.uri;
+				if (rel && root) {
+					void vscode.commands.executeCommand('vscode.open', vscode.Uri.joinPath(root, rel));
+				}
 				break;
 			}
 			case 'openRepoFolder': {
@@ -1364,6 +1441,9 @@ class OpenovaChatViewProvider implements vscode.WebviewViewProvider {
 						isNew: !existed
 					});
 				}
+				// Live-follow: the Editor pane in the Agents window tracks the
+				// file the agent is writing right now.
+				this.post({ type: 'agentWrote', path: relPath, content: content.slice(0, 200_000) });
 			}
 		};
 		const tools = createTools(host);
@@ -1521,7 +1601,7 @@ class OpenovaChatViewProvider implements vscode.WebviewViewProvider {
 <head>
 	<meta charset="UTF-8">
 	<meta http-equiv="Content-Security-Policy"
-		content="default-src 'none'; img-src ${webview.cspSource}; style-src ${webview.cspSource}; script-src 'nonce-${nonce}';">
+		content="default-src 'none'; img-src ${webview.cspSource}; style-src ${webview.cspSource}; script-src 'nonce-${nonce}'; frame-src http: https:;">
 	<link rel="stylesheet" href="${css}">
 </head>
 <body data-icon="${icon}" data-mode="${mode}">

@@ -21,6 +21,16 @@
 	let automations = [];
 	let repos = [];
 	let repoCurrent = null;
+	// side tool pane (Agents window): null | 'files' | 'browser' | 'terminal'
+	let toolView = null;
+	let currentFile = null;
+	let fileContent = '';
+	let followAgent = true;
+	const sessionFiles = [];
+	let browserUrl = 'http://localhost:5173';
+	let browserLoaded = null;
+	let termBuffer = '';
+	let termStarted = false;
 	// window-mode navigation
 	let view = 'chat'; // 'chat' | 'automations'
 	let sidebarSearch = null; // null = closed, string = filter
@@ -81,7 +91,10 @@
 		stop: 'M4 4h8v8H4z',
 		external: 'M6 3h7v7h-1.5V5.56L4.53 12.53 3.47 11.47 10.44 4.5H6V3z',
 		chevron: 'M4.5 6l3.5 3.5L11.5 6l1 1-4.5 4.5L3.5 7l1-1z',
-		display: 'M1.5 3h13a.5.5 0 01.5.5V11a.5.5 0 01-.5.5H9v1h2V14H5v-1.5h2v-1H1.5A.5.5 0 011 11V3.5a.5.5 0 01.5-.5zm1 1.5V10h11V4.5h-11z'
+		display: 'M1.5 3h13a.5.5 0 01.5.5V11a.5.5 0 01-.5.5H9v1h2V14H5v-1.5h2v-1H1.5A.5.5 0 011 11V3.5a.5.5 0 01.5-.5zm1 1.5V10h11V4.5h-11z',
+		doc: 'M4 1h5.5L13 4.5V15H4V1zm1.5 1.5v11h6V5.5H8.5V2.5h-3zM10 2.9V4h1.1L10 2.9zM6 7h5v1.2H6V7zm0 2.5h5v1.2H6V9.5z',
+		globe: 'M8 1a7 7 0 110 14A7 7 0 018 1zm-.75 1.66A5.5 5.5 0 002.52 7.25h2.6c.1-1.7.5-3.28 1.13-4.59zM8 2.62c-.63 1.13-1.13 2.72-1.25 4.63h2.5C9.13 5.34 8.63 3.75 8 2.62zm2.88 4.63h2.6a5.5 5.5 0 00-4.73-4.59c.64 1.31 1.03 2.9 1.13 4.59zm-.01 1.5c-.1 1.7-.49 3.28-1.12 4.59a5.5 5.5 0 004.73-4.59h-2.61zM8 13.38c.63-1.13 1.13-2.72 1.25-4.63h-2.5c.12 1.91.62 3.5 1.25 4.63zm-2.88-4.63h-2.6a5.5 5.5 0 004.73 4.59c-.63-1.31-1.03-2.9-1.13-4.59z',
+		term: 'M2 3h12a1 1 0 011 1v8a1 1 0 01-1 1H2a1 1 0 01-1-1V4a1 1 0 011-1zm.5 1.5v7h11v-7h-11zM4 6l2.2 1.9L4 9.8l.9 1L8 7.9 4.9 5.1 4 6zm4.5 4h3.5v1.2H8.5V10z'
 	};
 
 	// Minimal fenced-code renderer: text nodes + <pre> blocks, no innerHTML.
@@ -225,8 +238,28 @@
 		const main = el('div', 'win-main');
 		const sess = sessions.find((s) => s.id === active);
 
-		// slim top bar with a hop back to the editor window
+		// slim top bar: tool-pane toggles (editor / browser / terminal) + editor hop
 		const top = el('div', 'win-top');
+		const inChat = view === 'chat' && sess && sess.messages.length > 0;
+		const toolBtn = (key, ic, tip) => {
+			const b = el('button', 'toolbtn' + (toolView === key ? ' on' : ''));
+			b.appendChild(icon(ic, 14));
+			b.title = tip;
+			b.onclick = () => {
+				toolView = toolView === key ? null : key;
+				if (toolView === 'terminal' && !termStarted) {
+					termStarted = true;
+					vscode.postMessage({ type: 'termStart' });
+				}
+				render();
+			};
+			top.appendChild(b);
+		};
+		if (inChat) {
+			toolBtn('files', ICONS.doc, 'Editor — watch the files the agent writes');
+			toolBtn('browser', ICONS.globe, 'Browser — preview localhost / any URL');
+			toolBtn('terminal', ICONS.term, 'Terminal — a shell in this workspace');
+		}
 		top.appendChild(el('span', 'spacer'));
 		const ed = el('button', 'linkish');
 		ed.appendChild(document.createTextNode('Editor Window'));
@@ -240,12 +273,152 @@
 		} else if (view === 'customize') {
 			renderCustomize(main);
 		} else if (sess && sess.messages.length > 0) {
-			renderTranscript(main, sess, true);
+			if (toolView) {
+				const split = el('div', 'split');
+				const chatCol = el('div', 'chat-col');
+				renderTranscript(chatCol, sess, true);
+				split.appendChild(chatCol);
+				split.appendChild(renderToolPane(sess));
+				main.appendChild(split);
+			} else {
+				renderTranscript(main, sess, true);
+			}
 		} else {
 			renderHome(main);
 		}
 		shell.appendChild(main);
 		app.appendChild(shell);
+	}
+
+	// ---- side tool panes: editor / browser / terminal ----
+	function renderToolPane(sess) {
+		const pane = el('div', 'tool-col');
+		if (toolView === 'files') {
+			const head = el('div', 'tool-head');
+			// files the agent touched this session (latest first)
+			const touched = [];
+			for (const m of sess.messages) {
+				for (const w of m.writes || []) {
+					if (!touched.includes(w.path)) { touched.unshift(w.path); }
+				}
+			}
+			for (const p of sessionFiles) {
+				if (!touched.includes(p)) { touched.unshift(p); }
+			}
+			const sel = document.createElement('select');
+			sel.className = 'tool-file-sel';
+			if (!touched.length) {
+				const o = document.createElement('option');
+				o.textContent = 'No files written yet';
+				sel.appendChild(o);
+				sel.disabled = true;
+			}
+			for (const p of touched) {
+				const o = document.createElement('option');
+				o.value = p;
+				o.textContent = p;
+				sel.appendChild(o);
+			}
+			if (currentFile) { sel.value = currentFile; }
+			sel.onchange = () => {
+				currentFile = sel.value;
+				vscode.postMessage({ type: 'readFileContent', path: currentFile });
+			};
+			head.appendChild(sel);
+			const follow = el('button', 'tool-mini' + (followAgent ? ' on' : ''), 'Follow');
+			follow.title = 'Automatically show the file the agent is writing';
+			follow.onclick = () => {
+				followAgent = !followAgent;
+				render();
+			};
+			head.appendChild(follow);
+			const open = el('button', 'tool-mini', 'Open');
+			open.title = 'Open this file in the editor';
+			open.onclick = () => {
+				if (currentFile) { vscode.postMessage({ type: 'openInEditor', path: currentFile }); }
+			};
+			head.appendChild(open);
+			pane.appendChild(head);
+			const body = el('pre', 'tool-code');
+			body.textContent = currentFile
+				? fileContent || '(loading…)'
+				: 'The file the agent is writing shows here live.\nPick a file above, or wait for the agent to write one.';
+			pane.appendChild(body);
+		} else if (toolView === 'browser') {
+			const head = el('div', 'tool-head');
+			const url = document.createElement('input');
+			url.className = 'tool-url';
+			url.value = browserUrl;
+			url.placeholder = 'http://localhost:5173';
+			url.onkeydown = (e) => {
+				if (e.key === 'Enter') {
+					browserUrl = url.value.trim();
+					if (browserUrl && !/^https?:\/\//i.test(browserUrl)) { browserUrl = 'http://' + browserUrl; }
+					browserLoaded = browserUrl;
+					render();
+				}
+			};
+			head.appendChild(url);
+			const go = el('button', 'tool-mini', 'Go');
+			go.onclick = () => {
+				browserUrl = url.value.trim();
+				if (browserUrl && !/^https?:\/\//i.test(browserUrl)) { browserUrl = 'http://' + browserUrl; }
+				browserLoaded = browserUrl;
+				render();
+			};
+			head.appendChild(go);
+			// allow-any-unicode-next-line
+			const re = el('button', 'tool-mini', '⟳');
+			re.title = 'Reload';
+			re.onclick = () => {
+				const f = pane.querySelector('iframe');
+				if (f) { f.src = f.src; }
+			};
+			head.appendChild(re);
+			pane.appendChild(head);
+			if (browserLoaded) {
+				const frame = document.createElement('iframe');
+				frame.className = 'tool-frame';
+				frame.src = browserLoaded;
+				frame.setAttribute('sandbox', 'allow-scripts allow-same-origin allow-forms');
+				pane.appendChild(frame);
+			} else {
+				const empty = el('div', 'tool-empty');
+				empty.appendChild(el('div', '', 'Preview what the agent builds.'));
+				empty.appendChild(el('div', 'tool-empty-sub', 'Enter a URL above — dev servers on localhost work best.'));
+				pane.appendChild(empty);
+			}
+		} else if (toolView === 'terminal') {
+			const out = el('pre', 'tool-term');
+			out.textContent = termBuffer || '(starting shell…)';
+			pane.appendChild(out);
+			const row = el('div', 'tool-term-row');
+			// allow-any-unicode-next-line
+			row.appendChild(el('span', 'tool-prompt', '❯'));
+			const input = document.createElement('input');
+			input.className = 'tool-term-in';
+			input.placeholder = 'Type a command, Enter to run';
+			input.onkeydown = (e) => {
+				if (e.key === 'Enter' && input.value.trim() !== '') {
+					const cmd = input.value;
+					input.value = '';
+					termBuffer += '\n> ' + cmd + '\n';
+					if (!termStarted) {
+						termStarted = true;
+						vscode.postMessage({ type: 'termStart' });
+					}
+					vscode.postMessage({ type: 'termInput', data: cmd });
+					render();
+				}
+			};
+			row.appendChild(input);
+			pane.appendChild(row);
+			setTimeout(() => {
+				out.scrollTop = out.scrollHeight;
+				input.focus();
+			}, 0);
+		}
+		return pane;
 	}
 
 	function renderRail() {
@@ -1054,6 +1227,13 @@
 			pickerModels = [];
 			pickerLoading = true;
 			vscode.postMessage({ type: 'listModels', provider: pickerProvider });
+		} else if (v.indexOf('tool:') === 0) {
+			toolView = v.slice(5);
+			view = 'chat';
+			if (toolView === 'terminal' && !termStarted) {
+				termStarted = true;
+				vscode.postMessage({ type: 'termStart' });
+			}
 		} else {
 			view = v;
 		}
@@ -1121,6 +1301,32 @@
 				currentTheme = m.current || '';
 				render();
 				break;
+			case 'agentWrote':
+				if (!sessionFiles.includes(m.path)) { sessionFiles.unshift(m.path); }
+				if (isWindow && toolView === 'files' && followAgent) {
+					currentFile = m.path;
+					fileContent = m.content || '';
+					render();
+				} else if (currentFile === m.path) {
+					fileContent = m.content || '';
+					render();
+				}
+				break;
+			case 'fileContent':
+				if (m.path === currentFile) {
+					fileContent = m.content || '';
+					render();
+				}
+				break;
+			case 'termData': {
+				termBuffer = (termBuffer + (m.data || '')).slice(-200000);
+				const outEl = document.querySelector('.tool-term');
+				if (outEl) {
+					outEl.textContent = termBuffer;
+					outEl.scrollTop = outEl.scrollHeight;
+				}
+				break;
+			}
 			case 'workspaceFiles': {
 				wsFiles = m.files || [];
 				const ta = document.querySelector('.composer textarea');
