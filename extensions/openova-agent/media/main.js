@@ -36,6 +36,9 @@
 	let runStartLocal = 0;
 	let activityTimer = null;
 	let repoMenuOpen = false;
+	// transcript scroll: stick to bottom unless the user scrolled up
+	let stickToBottom = true;
+	let savedScrollTop = 0;
 	// window-mode navigation
 	let view = 'chat'; // 'chat' | 'automations'
 	let sidebarSearch = null; // null = closed, string = filter
@@ -295,13 +298,26 @@
 	}
 
 	// ---- rendering ----
+	function applyScroll() {
+		const m = document.querySelector('.msgs');
+		if (!m) { return; }
+		if (stickToBottom) {
+			m.scrollTop = m.scrollHeight;
+		} else {
+			m.scrollTop = savedScrollTop;
+		}
+	}
+
 	function render() {
 		app.textContent = '';
 		if (isWindow) {
 			renderWindow();
-			return;
+		} else {
+			renderSidebarMode();
 		}
-		renderSidebarMode();
+		// The transcript is only measurable once attached — scroll now, not
+		// during construction (scrollHeight is 0 on a detached node).
+		applyScroll();
 	}
 
 	// ============ agents-window shell: sidebar + main pane ============
@@ -1056,7 +1072,12 @@
 
 		const { composer } = buildComposer(false);
 		main.appendChild(composer);
-		msgs.scrollTop = msgs.scrollHeight;
+		// Sticky-bottom bookkeeping: scrolling up detaches from the bottom;
+		// scrolling back within 40px re-attaches.
+		msgs.onscroll = () => {
+			savedScrollTop = msgs.scrollTop;
+			stickToBottom = msgs.scrollHeight - msgs.scrollTop - msgs.clientHeight < 40;
+		};
 	}
 
 	// ============ sidebar (view) mode — unchanged layout ============
@@ -1493,6 +1514,7 @@
 		if (!text) { return; }
 		ta.value = '';
 		draft = '';
+		stickToBottom = true;
 		const ctx = contextChips.slice();
 		contextChips = [];
 		mentionQuery = null;
@@ -1611,6 +1633,7 @@
 				render();
 				break;
 			case 'sessions':
+				if (m.active !== active) { stickToBottom = true; }
 				sessions = m.sessions;
 				active = m.active;
 				render();
