@@ -698,6 +698,19 @@
 				if (m.plan) {
 					box.appendChild(renderPlan(m));
 				}
+				if (m.paused !== undefined) {
+					const pb = el('div', 'pausedbar');
+					pb.appendChild(
+						el('span', 'pb-text', 'Paused after ' + m.paused + ' steps — the task isn\'t finished yet.')
+					);
+					const go = el('button', 'pb-continue', 'Continue');
+					go.onclick = () => vscode.postMessage({ type: 'continueRun', sessionId: active });
+					pb.appendChild(go);
+					const stop = el('button', 'pb-stop', 'Stop here');
+					stop.onclick = () => vscode.postMessage({ type: 'abort', sessionId: active });
+					pb.appendChild(stop);
+					box.appendChild(pb);
+				}
 				if (m.id === liveMsgId && liveText) {
 					box.appendChild(el('div', 'live', liveText));
 				}

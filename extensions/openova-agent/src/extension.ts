@@ -62,6 +62,8 @@ interface UiMessage {
 	writes?: WriteEntry[];
 	reviewDismissed?: boolean;
 	plan?: Plan;
+	/** Set while an agent run is paused at its step budget (value = steps used). */
+	paused?: number;
 }
 
 interface Session {
@@ -368,6 +370,8 @@ class OpenovaChatViewProvider implements vscode.WebviewViewProvider {
 	private readonly runs = new Map<string, RunState>();
 	private readonly queues = new Map<string, QueuedItem[]>();
 	private readonly sessionAllowed = new Set<string>();
+	/** Resolvers for runs paused at their step budget (sessionId → grant more?). */
+	private readonly pauseResolvers = new Map<string, (more: boolean) => void>();
 	private automations: Automation[] = [];
 	/** One-shot view hint for the next webview init (dev harness). */
 	pendingView: string | null = null;
@@ -521,6 +525,10 @@ class OpenovaChatViewProvider implements vscode.WebviewViewProvider {
 			...s,
 			messages: s.messages.map((m) => {
 				let out = m;
+				// A paused run can't resume after a reload — don't persist the flag.
+				if (out.paused !== undefined) {
+					out = { ...out, paused: undefined };
+				}
 				if (out.writes) {
 					out = {
 						...out,
@@ -769,6 +777,16 @@ class OpenovaChatViewProvider implements vscode.WebviewViewProvider {
 			case 'newSession':
 				this.newSession();
 				break;
+			case 'continueRun': {
+				const sid = String(msg.sessionId ?? this.activeSession ?? '');
+				const resolve = this.pauseResolvers.get(sid);
+				if (resolve) {
+					this.pauseResolvers.delete(sid);
+					trace(`agent continue granted session=${sid}`);
+					resolve(true);
+				}
+				break;
+			}
 			case 'openSettings':
 				void vscode.commands.executeCommand('workbench.action.openSettings', '@ext:openova.openova-agent');
 				break;
@@ -979,6 +997,12 @@ class OpenovaChatViewProvider implements vscode.WebviewViewProvider {
 		if (!run) { return; }
 		run.stop = true;
 		if (run.requestId) { abortRequest(run.requestId); }
+		// A paused run waiting on Continue must also unwind on Stop.
+		const resolve = this.pauseResolvers.get(sessionId);
+		if (resolve) {
+			this.pauseResolvers.delete(sessionId);
+			resolve(false);
+		}
 	}
 
 	// ---- review bar / undo ---------------------------------------------------
@@ -1317,6 +1341,7 @@ class OpenovaChatViewProvider implements vscode.WebviewViewProvider {
 			this.post({ type: 'stepUpdate', sessionId, msgId: agentMsg.id, id, patch });
 		};
 		let currentToolId: string | null = null;
+		let devContinues = 0;
 
 		// Run write-ledger: first write wins for existed/before; counts summed.
 		const writes = new Map<string, WriteEntry>();
@@ -1445,8 +1470,28 @@ class OpenovaChatViewProvider implements vscode.WebviewViewProvider {
 							.replace(/<tool[\s\S]*$/i, '')
 							.trim();
 						this.post({ type: 'live', sessionId, msgId: agentMsg.id, text: cleaned.slice(0, 500) });
-					}
-				}
+					},
+					onPause: (stepsUsed) =>
+						new Promise<boolean>((resolve) => {
+							trace(`agent paused after ${stepsUsed} steps`);
+							// Headless harness: prove the resume path once, then stop —
+							// a modal-less run must never wait forever.
+							if (process.env.OPENOVA_DEV_TRIGGER) {
+								const more = devContinues++ < 1;
+								trace(`devPause: auto-${more ? 'continue' : 'stop'}`);
+								resolve(more);
+								return;
+							}
+							this.pauseResolvers.set(sessionId, (more) => {
+								this.mutateMsg(sessionId, agentMsg.id, (m) => { m.paused = undefined; });
+								this.postSessions();
+								resolve(more);
+							});
+							this.mutateMsg(sessionId, agentMsg.id, (m) => { m.paused = stepsUsed; });
+							this.postSessions();
+						})
+				},
+				Math.max(10, vscode.workspace.getConfiguration('openova').get<number>('maxAgentSteps', 40))
 			);
 		} finally {
 			this.mutateMsg(sessionId, agentMsg.id, (m) => {

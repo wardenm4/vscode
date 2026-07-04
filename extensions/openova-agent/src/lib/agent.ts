@@ -64,6 +64,12 @@ export interface AgentCallbacks {
 	onUsage?: (promptChars: number, completionChars: number) => void;
 	/** Live model output for the current turn (full text so far) — for streaming UI. */
 	onStreamDelta?: (fullText: string) => void;
+	/**
+	 * Step budget exhausted. Resolve true to grant another budget and RESUME
+	 * the run in place (full context kept); false ends it. Without this
+	 * callback the run ends with an error like before.
+	 */
+	onPause?: (stepsUsed: number) => Promise<boolean>;
 }
 
 const SYSTEM = `You are Openova Agent, an autonomous coding agent working inside a code editor with full access to the user's workspace. You complete the user's task by taking one action at a time.
@@ -131,7 +137,20 @@ export async function runAgent(
 	let writesSinceCheck = 0;
 	let checkFailures = 0;
 
-	for (let step = 0; step < maxSteps; step++) {
+	// The step cap is a BUDGET, not a wall: when it runs out the host can ask
+	// the user and grant another round — the loop resumes with context intact.
+	let budget = maxSteps;
+	let step = 0;
+	for (;;) {
+		if (step >= budget) {
+			const more = cb.onPause ? await cb.onPause(step) : false;
+			if (!more) {
+				cb.onError(`Stopped after ${step} steps without finishing.`);
+				return;
+			}
+			budget += maxSteps;
+		}
+		step++;
 		if (cb.shouldStop()) {return;}
 
 		// Merge any mid-run user feedback into the conversation (keeps the run going
@@ -424,6 +443,4 @@ export async function runAgent(
 		cb.onObservation(observation, toolFailed);
 		transcript.push({ role: 'user', content: `Result:\n${observation}` });
 	}
-
-	cb.onError(`Reached the ${maxSteps}-step limit before finishing. Ask it to continue.`);
 }

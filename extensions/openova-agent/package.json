@@ -143,6 +143,12 @@
           "default": "",
           "description": "Base URL override for the active provider."
         },
+        "openova.maxAgentSteps": {
+          "type": "number",
+          "default": 40,
+          "minimum": 10,
+          "description": "Agent step budget per round. When it runs out the run pauses with a Continue button (context kept) instead of stopping."
+        },
         "openova.checkCommand": {
           "type": "string",
           "default": "",
