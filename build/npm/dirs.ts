@@ -15,7 +15,8 @@ export const dirs = [
 	'build/vite',
 	'extensions',
 	'extensions/configuration-editing',
-	'extensions/copilot',
+	// Openova: extensions/copilot is removed from this fork
+	...(existsSync(`${import.meta.dirname}/../../extensions/copilot`) ? ['extensions/copilot'] : []),
 	'extensions/css-language-features',
 	'extensions/css-language-features/server',
 	'extensions/debug-auto-launch',
