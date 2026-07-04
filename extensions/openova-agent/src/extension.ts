@@ -439,6 +439,16 @@ class OpenovaChatViewProvider implements vscode.WebviewViewProvider {
 		this.post({ type: 'showView', view });
 	}
 
+	/** Workspace-relative or absolute path → Uri (absolute paths allowed). */
+	private resolvePathUri(p: string): vscode.Uri | undefined {
+		if (!p) { return undefined; }
+		if (/^[a-zA-Z]:[\\/]/.test(p) || p.startsWith('/')) {
+			return vscode.Uri.file(p);
+		}
+		const root = vscode.workspace.workspaceFolders?.[0]?.uri;
+		return root ? vscode.Uri.joinPath(root, p) : undefined;
+	}
+
 	// ---- terminal pane (Agents window) ----------------------------------------
 
 	private ensureTerm(): void {
@@ -807,10 +817,10 @@ class OpenovaChatViewProvider implements vscode.WebviewViewProvider {
 				break;
 			case 'readFileContent': {
 				const rel = String(msg.path ?? '');
-				const root = vscode.workspace.workspaceFolders?.[0]?.uri;
-				if (!rel || !root) { break; }
+				const uri = this.resolvePathUri(rel);
+				if (!rel || !uri) { break; }
 				try {
-					const bytes = await vscode.workspace.fs.readFile(vscode.Uri.joinPath(root, rel));
+					const bytes = await vscode.workspace.fs.readFile(uri);
 					this.post({
 						type: 'fileContent',
 						path: rel,
@@ -826,10 +836,9 @@ class OpenovaChatViewProvider implements vscode.WebviewViewProvider {
 				break;
 			}
 			case 'openInEditor': {
-				const rel = String(msg.path ?? '');
-				const root = vscode.workspace.workspaceFolders?.[0]?.uri;
-				if (rel && root) {
-					void vscode.commands.executeCommand('vscode.open', vscode.Uri.joinPath(root, rel));
+				const uri = this.resolvePathUri(String(msg.path ?? ''));
+				if (uri) {
+					void vscode.commands.executeCommand('vscode.open', uri);
 				}
 				break;
 			}
@@ -1476,6 +1485,7 @@ class OpenovaChatViewProvider implements vscode.WebviewViewProvider {
 		};
 		let currentToolId: string | null = null;
 		let devContinues = 0;
+		let autoExtends = 0;
 
 		// Run write-ledger: first write wins for existed/before; counts summed.
 		const writes = new Map<string, WriteEntry>();
@@ -1701,6 +1711,14 @@ class OpenovaChatViewProvider implements vscode.WebviewViewProvider {
 								const more = devContinues++ < 1;
 								trace(`devPause: auto-${more ? 'continue' : 'stop'}`);
 								resolve(more);
+								return;
+							}
+							// First exhaustion: extend silently — Cursor never interrupts
+							// a healthy run. The bar only appears on the SECOND exhaustion.
+							if (autoExtends++ < 1) {
+								trace('pause: auto-extended silently');
+								this.post({ type: 'activity', sessionId, msgId: agentMsg.id, status: 'Continuing (extended the step budget)', chars: 0 });
+								resolve(true);
 								return;
 							}
 							this.pauseResolvers.set(sessionId, (more) => {

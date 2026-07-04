@@ -190,6 +190,19 @@ select option {
 	font-family: var(--vscode-editor-font-family);
 	font-size: 11.5px;
 }
+.md-file {
+	background: var(--vscode-textCodeBlock-background);
+	border: none;
+	border-radius: 3px;
+	padding: 0 4px;
+	font-family: var(--vscode-editor-font-family);
+	font-size: 11.5px;
+	color: var(--vscode-textLink-foreground);
+	cursor: pointer;
+}
+.md-file:hover {
+	text-decoration: underline;
+}
 
 /* work section: prose narration + quiet grouped rows (Cursor-style) */
 .work {

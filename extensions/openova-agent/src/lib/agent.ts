@@ -176,6 +176,10 @@ export async function runAgent(
 	// models ignore prompt guidance, so the loop enforces it mechanically.
 	let planSettled = depth > 0 || !tools.proposePlan;
 	const writtenPaths = new Set<string>();
+	// Rewrite-loop guard: weak models burn entire step budgets rewriting the
+	// same file. Track per-file write counts and last-content fingerprints.
+	const writeCounts = new Map<string, number>();
+	const lastContent = new Map<string, string>();
 
 	// The step cap is a BUDGET, not a wall: when it runs out the host can ask
 	// the user and grant another round — the loop resumes with context intact.
@@ -322,8 +326,22 @@ export async function runAgent(
 						toolFailed = true;
 						break;
 					}
-					const note = await tools.writeFile(p, String(action.args.content ?? ''));
+					const content = String(action.args.content ?? '');
+					if (lastContent.get(p) === content) {
+						observation = `STOP — you already wrote ${p} with exactly this content. It is saved. Move on to the next step or call finish.`;
+						toolFailed = true;
+						break;
+					}
+					const rewrites = writeCounts.get(p) ?? 0;
+					if (rewrites >= 4) {
+						observation = `STOP — you have rewritten ${p} ${rewrites} times. The file is saved; do NOT write it again. Move on to the next step or call finish.`;
+						toolFailed = true;
+						break;
+					}
+					const note = await tools.writeFile(p, content);
 					writtenPaths.add(p);
+					writeCounts.set(p, rewrites + 1);
+					lastContent.set(p, content);
 					writesSinceCheck++;
 					observation = `Saved ${p}${typeof note === 'string' && note ? `\n${note}` : ''}`;
 					break;

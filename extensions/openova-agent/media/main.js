@@ -103,6 +103,26 @@
 
 	// ---- lightweight markdown → DOM (no innerHTML with model text) ----
 	// Inline: **bold**, *italic*, `code`. Block: headings, bullet lists, fences.
+	function looksLikePath(s) {
+		if (s.length > 220 || /\s{2,}/.test(s)) { return false; }
+		return /\.[a-zA-Z0-9]{1,6}$/.test(s.trim()) && !/[<>"|?*]/.test(s);
+	}
+
+	function openInternalFile(p) {
+		if (!isWindow) {
+			// the sidebar has no tool panes — open a real editor tab instead
+			vscode.postMessage({ type: 'openInEditor', path: p.trim() });
+			return;
+		}
+		toolView = 'files';
+		followAgent = false;
+		view = 'chat';
+		currentFile = p.trim();
+		fileContent = '';
+		vscode.postMessage({ type: 'readFileContent', path: currentFile });
+		render();
+	}
+
 	function mdInline(target, text) {
 		const re = /(\*\*[^*]+\*\*|\*[^*\n]+\*|`[^`\n]+`)/g;
 		let last = 0;
@@ -113,7 +133,16 @@
 			if (tok.startsWith('**')) {
 				target.appendChild(el('strong', '', tok.slice(2, -2)));
 			} else if (tok.startsWith('`')) {
-				target.appendChild(el('code', 'md-code', tok.slice(1, -1)));
+				const inner = tok.slice(1, -1);
+				if (looksLikePath(inner)) {
+					// file reference — opens in the in-app Editor pane
+					const link = el('button', 'md-file', inner);
+					link.title = 'Open in the Editor pane';
+					link.onclick = () => openInternalFile(inner);
+					target.appendChild(link);
+				} else {
+					target.appendChild(el('code', 'md-code', inner));
+				}
 			} else {
 				target.appendChild(el('em', '', tok.slice(1, -1)));
 			}
@@ -1375,7 +1404,14 @@
 			// allow-any-unicode-next-line
 			line.appendChild(el('span', 'xn', '×' + count));
 		}
-		line.onclick = toggle;
+		if (st.kind === 'write_file') {
+			// edited-file rows open the file in the Editor pane
+			row.classList.add('has-detail');
+			line.title = 'Open ' + label;
+			line.onclick = () => openInternalFile(label);
+		} else {
+			line.onclick = toggle;
+		}
 		row.appendChild(line);
 		if (open && st.detail) {
 			const d = el('pre', 'cmd-out');
