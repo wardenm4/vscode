@@ -66,6 +66,8 @@ interface UiMessage {
 	paused?: number;
 	/** Set while the agent is waiting on a user answer (ask_user tool). */
 	pendingQuestion?: { qid: string; question: string; options: string[] };
+	/** Wall-clock duration of the finished run, for "Worked for Ns". */
+	durationMs?: number;
 }
 
 interface Session {
@@ -1422,6 +1424,7 @@ class OpenovaChatViewProvider implements vscode.WebviewViewProvider {
 		sess.messages.push(userMsg, agentMsg);
 		this.postSessions();
 		this.post({ type: 'running', sessionId, running: true });
+		const runStartedAt = Date.now();
 
 		const run: RunState = { stop: false, requestId: null };
 		this.runs.set(sessionId, run);
@@ -1620,6 +1623,7 @@ class OpenovaChatViewProvider implements vscode.WebviewViewProvider {
 		} finally {
 			this.mutateMsg(sessionId, agentMsg.id, (m) => {
 				if (writes.size) { m.writes = Array.from(writes.values()); }
+				m.durationMs = Date.now() - runStartedAt;
 			});
 			if (opts.plan) {
 				const ref = opts.plan;

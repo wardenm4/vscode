@@ -97,7 +97,27 @@
 		term: 'M2 3h12a1 1 0 011 1v8a1 1 0 01-1 1H2a1 1 0 01-1-1V4a1 1 0 011-1zm.5 1.5v7h11v-7h-11zM4 6l2.2 1.9L4 9.8l.9 1L8 7.9 4.9 5.1 4 6zm4.5 4h3.5v1.2H8.5V10z'
 	};
 
-	// Minimal fenced-code renderer: text nodes + <pre> blocks, no innerHTML.
+	// ---- lightweight markdown → DOM (no innerHTML with model text) ----
+	// Inline: **bold**, *italic*, `code`. Block: headings, bullet lists, fences.
+	function mdInline(target, text) {
+		const re = /(\*\*[^*]+\*\*|\*[^*\n]+\*|`[^`\n]+`)/g;
+		let last = 0;
+		let m;
+		while ((m = re.exec(text))) {
+			if (m.index > last) { target.appendChild(document.createTextNode(text.slice(last, m.index))); }
+			const tok = m[0];
+			if (tok.startsWith('**')) {
+				target.appendChild(el('strong', '', tok.slice(2, -2)));
+			} else if (tok.startsWith('`')) {
+				target.appendChild(el('code', 'md-code', tok.slice(1, -1)));
+			} else {
+				target.appendChild(el('em', '', tok.slice(1, -1)));
+			}
+			last = m.index + tok.length;
+		}
+		if (last < text.length) { target.appendChild(document.createTextNode(text.slice(last))); }
+	}
+
 	function renderBody(container, text) {
 		container.textContent = '';
 		const parts = String(text).split(/```[\w-]*\n?/);
@@ -107,18 +127,37 @@
 				const pre = el('pre');
 				pre.textContent = parts[i].replace(/\n$/, '');
 				container.appendChild(pre);
-			} else {
-				container.appendChild(document.createTextNode(parts[i]));
+				continue;
+			}
+			// block-level pass over non-fenced text
+			const lines = parts[i].split('\n');
+			let list = null;
+			for (const line of lines) {
+				const bullet = /^\s*[-*]\s+(.*)$/.exec(line);
+				if (bullet) {
+					if (!list) {
+						list = el('ul', 'md-list');
+						container.appendChild(list);
+					}
+					const li = el('li');
+					mdInline(li, bullet[1]);
+					list.appendChild(li);
+					continue;
+				}
+				list = null;
+				const heading = /^\s*(#{1,4})\s+(.*)$/.exec(line);
+				if (heading) {
+					const h = el('div', 'md-h md-h' + heading[1].length);
+					mdInline(h, heading[2]);
+					container.appendChild(h);
+					continue;
+				}
+				if (!line.trim()) { continue; }
+				const p = el('div', 'md-p');
+				mdInline(p, line);
+				container.appendChild(p);
 			}
 		}
-	}
-
-	function glyphFor(step) {
-		if (step.status === 'running') {
-			return el('span', 'spin');
-		}
-		// allow-any-unicode-next-line
-		return document.createTextNode(step.status === 'error' ? '✕' : step.kind === 'thought' ? '·' : '✓');
 	}
 
 	function basename(p) {
@@ -839,7 +878,6 @@
 			for (let mi = 0; mi < sess.messages.length; mi++) {
 				const m = sess.messages[mi];
 				const box = el('div', 'msg ' + m.role);
-				const who = el('div', 'who', m.role === 'user' ? 'You' : 'Openova');
 				// Checkpoint: a user turn whose run recorded restorable writes gets
 				// a whole-run restore affordance (works even after Keep all).
 				if (m.role === 'user') {
@@ -851,22 +889,13 @@
 						rc.title = 'Restore every file this turn changed to its pre-run state';
 						rc.onclick = () =>
 							vscode.postMessage({ type: 'undoWrites', sessionId: active, msgId: next.id });
-						who.appendChild(rc);
+						box.appendChild(rc);
 					}
 				}
-				box.appendChild(who);
 				if (m.steps && m.steps.length) {
-					const steps = el('div', 'steps');
-					// Collapse consecutive repeats of the same action into one row
-					// with a repeat count — agents often retry the same edit.
-					let si = 0;
-					while (si < m.steps.length) {
-						let sj = si + 1;
-						while (sj < m.steps.length && m.steps[sj].title === m.steps[si].title) { sj++; }
-						steps.appendChild(renderStep(m.steps[sj - 1], sj - si));
-						si = sj;
-					}
-					box.appendChild(steps);
+					const isLast = m.role === 'assistant' && mi === sess.messages.length - 1;
+					const isLive = (running && isLast) || !!m.pendingQuestion || m.paused !== undefined;
+					box.appendChild(renderWork(m, isLive));
 				}
 				if (m.plan) {
 					box.appendChild(renderPlan(m));
@@ -1157,28 +1186,180 @@
 		return card;
 	}
 
-	function renderStep(st, count) {
-		const box = el('div', 'step ' + st.status + (st.kind === 'thought' ? ' thought' : ''));
-		const row = el('div', 'row');
-		const g = el('span', 'glyph');
-		g.appendChild(glyphFor(st));
-		row.appendChild(g);
-		row.appendChild(el('span', 't', st.title));
+	// ---- Cursor-style work section: prose narration + quiet grouped rows ----
+	const expandedWork = new Set();
+	const expandedGroups = new Set();
+	const expandedSteps = new Set();
+
+	function fmtDuration(ms) {
+		if (!ms || ms < 1000) { return ''; }
+		const s = Math.round(ms / 1000);
+		if (s < 60) { return s + 's'; }
+		return Math.floor(s / 60) + 'm ' + (s % 60) + 's';
+	}
+
+	function dedupSteps(steps) {
+		const out = [];
+		let i = 0;
+		while (i < steps.length) {
+			let j = i + 1;
+			while (j < steps.length && steps[j].title === steps[i].title) { j++; }
+			out.push({ st: steps[j - 1], count: j - i });
+			i = j;
+		}
+		return out;
+	}
+
+	const EXPLORE_KINDS = { list_files: 1, read_file: 1, search: 1, codebase_search: 1 };
+
+	function renderWork(m, live) {
+		const wrap = el('div', 'work');
+		const expanded = live || expandedWork.has(m.id);
+		if (!live) {
+			const head = el('button', 'work-head');
+			const dur = fmtDuration(m.durationMs);
+			head.appendChild(el('span', '', dur ? 'Worked for ' + dur : 'Worked'));
+			const chev = el('span', 'work-chev' + (expanded ? ' open' : ''));
+			chev.appendChild(icon(ICONS.chevron, 11));
+			head.appendChild(chev);
+			head.onclick = () => {
+				if (expandedWork.has(m.id)) { expandedWork.delete(m.id); }
+				else { expandedWork.add(m.id); }
+				render();
+			};
+			wrap.appendChild(head);
+			if (!expanded) { return wrap; }
+		}
+		const body = el('div', 'work-body');
+		const dedup = dedupSteps(m.steps);
+		let gi = 0;
+		let k = 0;
+		while (k < dedup.length) {
+			const st = dedup[k].st;
+			if (st.kind === 'thought') {
+				const p = el('div', 'work-prose');
+				mdInline(p, st.title);
+				body.appendChild(p);
+				k++;
+			} else if (EXPLORE_KINDS[st.kind] && st.status !== 'running') {
+				const group = [];
+				while (
+					k < dedup.length &&
+					EXPLORE_KINDS[dedup[k].st.kind] &&
+					dedup[k].st.status !== 'running'
+				) {
+					group.push(dedup[k]);
+					k++;
+				}
+				body.appendChild(renderExploreGroup(m.id, gi++, group));
+			} else {
+				body.appendChild(renderActionRow(m, st, dedup[k].count));
+				k++;
+			}
+		}
+		wrap.appendChild(body);
+		return wrap;
+	}
+
+	function renderExploreGroup(msgId, gi, group) {
+		const key = msgId + ':' + gi;
+		const wrap = el('div', 'explore');
+		const files = new Set();
+		let searches = 0;
+		let listed = false;
+		for (const g of group) {
+			if (g.st.kind === 'read_file') { files.add(g.st.title); }
+			else if (g.st.kind === 'list_files') { listed = true; }
+			else { searches++; }
+		}
+		const bits = [];
+		if (files.size) { bits.push(files.size + ' file' + (files.size === 1 ? '' : 's')); }
+		if (searches) { bits.push(searches + ' search' + (searches === 1 ? '' : 'es')); }
+		if (!bits.length && listed) { bits.push('the workspace'); }
+		const isOpen = expandedGroups.has(key);
+		const head = el('button', 'explore-head');
+		head.appendChild(el('span', '', 'Explored ' + bits.join(', ')));
+		const chev = el('span', 'work-chev' + (isOpen ? ' open' : ''));
+		chev.appendChild(icon(ICONS.chevron, 10));
+		head.appendChild(chev);
+		head.onclick = () => {
+			if (expandedGroups.has(key)) { expandedGroups.delete(key); }
+			else { expandedGroups.add(key); }
+			render();
+		};
+		wrap.appendChild(head);
+		if (isOpen) {
+			const list = el('div', 'explore-list');
+			for (const g of group) { list.appendChild(renderActionRow(null, g.st, g.count)); }
+			wrap.appendChild(list);
+		}
+		return wrap;
+	}
+
+	function renderActionRow(m, st, count) {
+		const open = expandedSteps.has(st.id);
+		const toggle = () => {
+			if (!st.detail) { return; }
+			if (expandedSteps.has(st.id)) { expandedSteps.delete(st.id); }
+			else { expandedSteps.add(st.id); }
+			render();
+		};
+		if (st.kind === 'run_command' || st.kind === 'check') {
+			const row = el('div', 'cmd' + (st.status === 'error' ? ' err' : ''));
+			const head = el('button', 'cmd-head');
+			head.appendChild(el('span', 'cmd-label', st.kind === 'check' ? 'Checked' : 'Ran'));
+			head.appendChild(el('code', 'cmd-text', st.title.replace(/^\$\s*/, '')));
+			if (st.status === 'running') { head.appendChild(el('span', 'spin')); }
+			if (st.detail) {
+				const chev = el('span', 'work-chev' + (open ? ' open' : ''));
+				chev.appendChild(icon(ICONS.chevron, 10));
+				head.appendChild(chev);
+			}
+			head.onclick = toggle;
+			row.appendChild(head);
+			if (open && st.detail) {
+				const out = el('pre', 'cmd-out');
+				out.textContent = st.detail;
+				row.appendChild(out);
+			}
+			return row;
+		}
+		// compact quiet line for everything else
+		const row = el('div', 'wl' + (st.status === 'error' ? ' err' : '') + (st.detail ? ' has-detail' : ''));
+		const line = el('button', 'wl-line');
+		if (st.status === 'running') {
+			line.appendChild(el('span', 'spin'));
+		}
+		let label = st.title;
+		if (st.kind === 'write_file') {
+			label = st.title.replace(/^Edited /, '');
+			line.appendChild(el('span', 'wl-verb', 'Edited'));
+		} else if (st.kind === 'read_file') {
+			label = st.title.replace(/^Read /, '');
+			line.appendChild(el('span', 'wl-verb', 'Read'));
+		} else if (st.kind === 'finish') {
+			line.appendChild(el('span', 'wl-verb', 'Done'));
+		}
+		line.appendChild(el('span', 'wl-text', label));
+		if (st.kind === 'write_file' && m && m.writes) {
+			const w = m.writes.find((x) => x.path === label);
+			if (w) {
+				if (w.added) { line.appendChild(el('span', 'radd', '+' + w.added)); }
+				if (w.removed) { line.appendChild(el('span', 'rdel', '-' + w.removed)); }
+			}
+		}
 		if (count > 1) {
 			// allow-any-unicode-next-line
-			row.appendChild(el('span', 'xn', '×' + count));
+			line.appendChild(el('span', 'xn', '×' + count));
 		}
-		box.appendChild(row);
-		if (st.detail) {
-			const d = el('pre', 'detail');
+		line.onclick = toggle;
+		row.appendChild(line);
+		if (open && st.detail) {
+			const d = el('pre', 'cmd-out');
 			d.textContent = st.detail;
-			d.style.display = 'none';
-			row.onclick = () => {
-				d.style.display = d.style.display === 'none' ? 'block' : 'none';
-			};
-			box.appendChild(d);
+			row.appendChild(d);
 		}
-		return box;
+		return row;
 	}
 
 	function submit(ta) {
