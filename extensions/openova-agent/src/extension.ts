@@ -922,6 +922,18 @@ class OpenovaChatViewProvider implements vscode.WebviewViewProvider {
 			case 'openRepo':
 				void vscode.commands.executeCommand('workbench.action.openRecent');
 				break;
+			case 'pickFolder': {
+				const picked = await vscode.window.showOpenDialog({
+					canSelectFolders: true,
+					canSelectFiles: false,
+					canSelectMany: false,
+					openLabel: 'Open in Openova'
+				});
+				if (picked?.[0]) {
+					void vscode.commands.executeCommand('vscode.openFolder', picked[0], { forceNewWindow: false });
+				}
+				break;
+			}
 			case 'editorWindow':
 				// The Agents surface lives in an aux window — cycle focus back to
 				// the main editor window.

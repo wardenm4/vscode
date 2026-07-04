@@ -35,6 +35,7 @@
 	let activity = null;
 	let runStartLocal = 0;
 	let activityTimer = null;
+	let repoMenuOpen = false;
 	// window-mode navigation
 	let view = 'chat'; // 'chat' | 'automations'
 	let sidebarSearch = null; // null = closed, string = filter
@@ -546,7 +547,13 @@
 			}
 		}
 
-		rail.appendChild(el('div', 'rail-head', 'Repositories'));
+		const rh = el('div', 'rail-head rail-head-row');
+		rh.appendChild(el('span', '', 'Repositories'));
+		const addRepo = el('button', 'rail-add', '+');
+		addRepo.title = 'Open a folder in Openova';
+		addRepo.onclick = () => vscode.postMessage({ type: 'pickFolder' });
+		rh.appendChild(addRepo);
+		rail.appendChild(rh);
 		const scroller = el('div', 'rail-scroll');
 		rail.appendChild(scroller);
 		renderRailSessions(rail);
@@ -635,14 +642,61 @@
 		const home = el('div', 'home');
 		const inner = el('div', 'home-inner');
 
-		// repo + machine row, Cursor-style
+		// repo + machine row, Cursor-style — the pill opens a switcher menu
 		const where = el('div', 'where');
+		const repoWrap = el('span', 'where-wrap');
 		const repo = el('button', 'where-repo');
 		repo.appendChild(el('span', '', workspace || 'Open a folder'));
 		repo.appendChild(icon(ICONS.chevron, 11));
-		repo.title = 'Open a recent folder';
-		repo.onclick = () => vscode.postMessage({ type: 'openRepo' });
-		where.appendChild(repo);
+		repo.title = 'Switch repository / folder';
+		repo.onclick = (e) => {
+			e.stopPropagation();
+			repoMenuOpen = !repoMenuOpen;
+			render();
+		};
+		repoWrap.appendChild(repo);
+		if (repoMenuOpen) {
+			const menu = el('div', 'repo-menu');
+			for (const r of repos) {
+				const row = el('button', 'rm-row' + (r.path === repoCurrent ? ' current' : ''));
+				row.appendChild(icon(ICONS.folder, 12));
+				const meta = el('span', 'rm-meta');
+				meta.appendChild(el('span', 'rm-name', r.name));
+				meta.appendChild(el('span', 'rm-path', r.path));
+				row.appendChild(meta);
+				row.onclick = () => {
+					repoMenuOpen = false;
+					if (r.path !== repoCurrent) {
+						vscode.postMessage({ type: 'openRepoFolder', path: r.path });
+					}
+					render();
+				};
+				menu.appendChild(row);
+			}
+			if (repos.length) { menu.appendChild(el('div', 'rm-sep')); }
+			const browse = el('button', 'rm-row');
+			browse.appendChild(el('span', 'rm-plus', '+'));
+			// allow-any-unicode-next-line
+			browse.appendChild(el('span', 'rm-name', 'Open folder…'));
+			browse.onclick = () => {
+				repoMenuOpen = false;
+				vscode.postMessage({ type: 'pickFolder' });
+				render();
+			};
+			menu.appendChild(browse);
+			const recent = el('button', 'rm-row');
+			recent.appendChild(el('span', 'rm-plus', ''));
+			// allow-any-unicode-next-line
+			recent.appendChild(el('span', 'rm-name', 'Open recent…'));
+			recent.onclick = () => {
+				repoMenuOpen = false;
+				vscode.postMessage({ type: 'openRepo' });
+				render();
+			};
+			menu.appendChild(recent);
+			repoWrap.appendChild(menu);
+		}
+		where.appendChild(repoWrap);
 		const local = el('span', 'where-local');
 		local.appendChild(icon(ICONS.display, 12));
 		local.appendChild(el('span', '', 'Local'));

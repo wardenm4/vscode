@@ -1368,6 +1368,25 @@ select option {
 	overflow-y: auto;
 	min-height: 0;
 }
+.rail-head-row {
+	display: flex;
+	align-items: center;
+	justify-content: space-between;
+}
+.rail-add {
+	border: none;
+	background: transparent;
+	color: var(--vscode-descriptionForeground);
+	font-size: 14px;
+	line-height: 1;
+	cursor: pointer;
+	padding: 0 4px;
+	border-radius: 4px;
+}
+.rail-add:hover {
+	background: var(--vscode-list-hoverBackground);
+	color: var(--vscode-foreground);
+}
 .repo-name {
 	display: flex;
 	align-items: center;
@@ -1524,6 +1543,76 @@ select option {
 	gap: 5px;
 	color: var(--vscode-descriptionForeground);
 	font-size: 12px;
+}
+.where-wrap {
+	position: relative;
+	display: inline-flex;
+}
+.repo-menu {
+	position: absolute;
+	top: calc(100% + 4px);
+	left: 0;
+	min-width: 300px;
+	max-width: 420px;
+	background: var(--vscode-dropdown-background, var(--vscode-input-background));
+	border: 1px solid var(--vscode-input-border, rgba(128, 128, 128, 0.35));
+	border-radius: 9px;
+	box-shadow: 0 8px 28px rgba(0, 0, 0, 0.4);
+	padding: 5px;
+	z-index: 30;
+}
+.rm-row {
+	display: flex;
+	align-items: center;
+	gap: 9px;
+	width: 100%;
+	border: none;
+	background: transparent;
+	color: var(--vscode-foreground);
+	font-family: var(--vscode-font-family);
+	border-radius: 6px;
+	padding: 6px 9px;
+	cursor: pointer;
+	text-align: left;
+}
+.rm-row:hover {
+	background: var(--vscode-list-hoverBackground);
+}
+.rm-row.current {
+	background: var(--vscode-list-activeSelectionBackground);
+}
+.rm-row svg {
+	flex-shrink: 0;
+	opacity: 0.7;
+}
+.rm-meta {
+	min-width: 0;
+	display: flex;
+	flex-direction: column;
+}
+.rm-name {
+	font-size: 12.5px;
+	overflow: hidden;
+	text-overflow: ellipsis;
+	white-space: nowrap;
+}
+.rm-path {
+	font-size: 10.5px;
+	color: var(--vscode-descriptionForeground);
+	overflow: hidden;
+	text-overflow: ellipsis;
+	white-space: nowrap;
+}
+.rm-plus {
+	width: 12px;
+	text-align: center;
+	color: var(--vscode-descriptionForeground);
+	flex-shrink: 0;
+}
+.rm-sep {
+	height: 1px;
+	background: var(--vscode-input-border, rgba(128, 128, 128, 0.25));
+	margin: 4px 6px;
 }
 .home-composer {
 	width: 100%;
