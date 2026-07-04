@@ -466,6 +466,23 @@ select option {
 	color: var(--vscode-foreground);
 }
 
+/* live activity heartbeat */
+.activity {
+	display: flex;
+	align-items: center;
+	gap: 8px;
+	margin: 7px 0 2px;
+	font-size: 12px;
+	color: var(--vscode-descriptionForeground);
+}
+.activity-status {
+	color: var(--vscode-foreground);
+	opacity: 0.85;
+}
+.activity-meta {
+	font-size: 11px;
+}
+
 /* paused-at-step-budget bar */
 .pausedbar {
 	display: flex;

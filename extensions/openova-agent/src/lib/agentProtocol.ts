@@ -26,6 +26,7 @@ export const TOOL_NAMES = [
 	'mcp_call',
 	'screenshot',
 	'ask_user',
+	'propose_plan',
 	'finish'
 ];
 
@@ -83,6 +84,14 @@ function buildAction(tool: string, attrs: string, body: string): Action {
 			.map((l) => l.trim())
 			.filter(Boolean)
 			.slice(0, 6);
+	} else if (tool === 'propose_plan') {
+		args.title = readAttr(attrs, 'title') ?? 'Plan';
+		// one step per body line; tolerate "1. " / "- " prefixes
+		args.steps = inner
+			.split(/\r?\n/)
+			.map((l) => l.replace(/^\s*(?:\d+[.)]\s*|[-*]\s*)/, '').trim())
+			.filter(Boolean)
+			.slice(0, 12);
 	} else if (tool === 'finish') {args.summary = summary ?? (inner || 'Done.');}
 	return { tool, args };
 }

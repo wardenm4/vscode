@@ -381,6 +381,8 @@ class OpenovaChatViewProvider implements vscode.WebviewViewProvider {
 	private term: cp.ChildProcessWithoutNullStreams | undefined;
 	/** Resolvers for ask_user questions awaiting an answer (qid → resolver). */
 	private readonly questionResolvers = new Map<string, { sessionId: string; resolve: (a: string) => void }>();
+	/** Resolvers for in-run propose_plan cards awaiting approval (sessionId). */
+	private readonly planResolvers = new Map<string, { msgId: string; resolve: (steps: string[] | null) => void }>();
 	private automations: Automation[] = [];
 	/** One-shot view hint for the next webview init (dev harness). */
 	pendingView: string | null = null;
@@ -960,14 +962,40 @@ class OpenovaChatViewProvider implements vscode.WebviewViewProvider {
 					}
 				});
 				break;
-			case 'planCancel':
-				this.mutatePlan(String(msg.sessionId), String(msg.msgId), (p) => {
+			case 'planCancel': {
+				const sid = String(msg.sessionId);
+				this.mutatePlan(sid, String(msg.msgId), (p) => {
 					if (p.status === 'proposed') { p.status = 'cancelled'; }
 				});
+				const pr = this.planResolvers.get(sid);
+				if (pr && pr.msgId === String(msg.msgId)) {
+					this.planResolvers.delete(sid);
+					pr.resolve(null);
+				}
 				break;
-			case 'planApprove':
-				await this.approvePlan(String(msg.sessionId), String(msg.msgId));
+			}
+			case 'planApprove': {
+				const sid = String(msg.sessionId);
+				const pr = this.planResolvers.get(sid);
+				if (pr && pr.msgId === String(msg.msgId)) {
+					// In-run proposal: hand the (possibly edited) steps back to the
+					// waiting agent loop — same run continues.
+					this.planResolvers.delete(sid);
+					let finalSteps: string[] = [];
+					this.mutatePlan(sid, pr.msgId, (p) => {
+						p.steps = p.steps.filter((s) => s.text.trim());
+						p.status = 'running';
+						finalSteps = p.steps.map((s) => s.text);
+					});
+					this.persist();
+					this.postSessions();
+					trace(`plan approved in-run (${finalSteps.length} steps)`);
+					pr.resolve(finalSteps);
+				} else {
+					await this.approvePlan(sid, String(msg.msgId));
+				}
 				break;
+			}
 			case 'cancelQueued': {
 				const sessionId = String(msg.sessionId ?? '');
 				const q = (this.queues.get(sessionId) ?? []).filter((x) => x.id !== String(msg.id));
@@ -1101,6 +1129,12 @@ class OpenovaChatViewProvider implements vscode.WebviewViewProvider {
 				this.questionResolvers.delete(qid);
 				q.resolve('(the user stopped the run)');
 			}
+		}
+		// …and any in-run plan proposal.
+		const pp = this.planResolvers.get(sessionId);
+		if (pp) {
+			this.planResolvers.delete(sessionId);
+			pp.resolve(null);
 		}
 	}
 
@@ -1525,15 +1559,50 @@ class OpenovaChatViewProvider implements vscode.WebviewViewProvider {
 				/* MCP is best-effort — the run proceeds without it */
 			}
 		}
-		if (opts.plan) {
-			const ref = opts.plan;
-			tools.updatePlan = (stepIndex) => {
-				this.mutatePlan(ref.sessionId, ref.msgId, (p) => {
-					const st = p.steps[stepIndex - 1];
-					if (st) { st.done = true; }
+		// update_plan targets the run's plan card — either the pre-approved plan
+		// this run came from (plan mode) or one proposed mid-run via propose_plan.
+		let activePlanMsgId: string | null = opts.plan?.msgId ?? null;
+		const activePlanSessionId = opts.plan?.sessionId ?? sessionId;
+		tools.updatePlan = (stepIndex) => {
+			if (!activePlanMsgId) { return; }
+			this.mutatePlan(activePlanSessionId, activePlanMsgId, (p) => {
+				const st = p.steps[stepIndex - 1];
+				if (st) { st.done = true; }
+			});
+		};
+		tools.proposePlan = (planTitle, stepTexts) =>
+			new Promise<string[] | null>((resolve) => {
+				// Headless harness: auto-approve so runs never hang.
+				if (process.env.OPENOVA_DEV_TRIGGER) {
+					trace(`devProposePlan auto-approved: ${planTitle} (${stepTexts.length} steps)`);
+					this.mutateMsg(sessionId, agentMsg.id, (m) => {
+						m.plan = {
+							title: planTitle,
+							steps: stepTexts.map((t) => ({ id: uid(), text: t, done: false })),
+							status: 'running'
+						};
+					});
+					activePlanMsgId = agentMsg.id;
+					this.postSessions();
+					resolve(stepTexts);
+					return;
+				}
+				this.mutateMsg(sessionId, agentMsg.id, (m) => {
+					m.plan = {
+						title: planTitle,
+						steps: stepTexts.map((t) => ({ id: uid(), text: t, done: false })),
+						status: 'proposed'
+					};
 				});
-			};
-		}
+				this.postSessions();
+				this.planResolvers.set(sessionId, {
+					msgId: agentMsg.id,
+					resolve: (steps) => {
+						if (steps) { activePlanMsgId = agentMsg.id; }
+						resolve(steps);
+					}
+				});
+			});
 		const s = this.settings();
 
 		const title = (name: string, args: Record<string, unknown>): string => {
@@ -1568,6 +1637,7 @@ class OpenovaChatViewProvider implements vscode.WebviewViewProvider {
 					onAction: (name, args) => {
 						currentToolId = uid();
 						addStep({ id: currentToolId, kind: name, title: title(name, args), status: 'running' });
+						this.post({ type: 'activity', sessionId, msgId: agentMsg.id, status: title(name, args), chars: 0 });
 					},
 					onObservation: (obs, isError) => {
 						if (currentToolId) {
@@ -1597,6 +1667,30 @@ class OpenovaChatViewProvider implements vscode.WebviewViewProvider {
 							.replace(/<tool[\s\S]*$/i, '')
 							.trim();
 						this.post({ type: 'live', sessionId, msgId: agentMsg.id, text: cleaned.slice(0, 500) });
+						// Activity heartbeat: even while a huge file body streams (nothing
+						// visible above), tell the user exactly what's being generated.
+						const toolTag = /<tool\b[^>]*name="(\w+)"[^>]*?(?:path="([^"]*)")?[^>]*>/i.exec(full);
+						let status: string;
+						if (toolTag) {
+							const t = toolTag[1];
+							status =
+								t === 'write_file' ? `Writing ${toolTag[2] || 'a file'}` :
+									t === 'run_command' ? 'Preparing a command' :
+										t === 'propose_plan' ? 'Drafting a plan' :
+											t === 'ask_user' ? 'Writing a question' :
+												t === 'finish' ? 'Wrapping up' : t.replace(/_/g, ' ');
+						} else if (/<think/i.test(full) || !cleaned) {
+							status = 'Thinking';
+						} else {
+							status = 'Responding';
+						}
+						this.post({
+							type: 'activity',
+							sessionId,
+							msgId: agentMsg.id,
+							status,
+							chars: full.length
+						});
 					},
 					onPause: (stepsUsed) =>
 						new Promise<boolean>((resolve) => {
@@ -1625,10 +1719,19 @@ class OpenovaChatViewProvider implements vscode.WebviewViewProvider {
 				if (writes.size) { m.writes = Array.from(writes.values()); }
 				m.durationMs = Date.now() - runStartedAt;
 			});
-			if (opts.plan) {
-				const ref = opts.plan;
-				this.mutatePlan(ref.sessionId, ref.msgId, (p) => {
-					if (p.status === 'running') { p.status = 'done'; }
+			if (activePlanMsgId) {
+				// Settle the plan card: a clean finish completes it (weak models
+				// often skip update_plan), a stop leaves it cancelled.
+				const stopped = this.runs.get(sessionId)?.stop ?? false;
+				this.mutatePlan(activePlanSessionId, activePlanMsgId, (p) => {
+					if (p.status === 'running') {
+						if (stopped) {
+							p.status = 'cancelled';
+						} else {
+							p.status = 'done';
+							for (const st of p.steps) { st.done = true; }
+						}
+					}
 				});
 				trace('plan run finished');
 			}

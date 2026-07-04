@@ -39,6 +39,12 @@ export interface AgentTools {
 	screenshot?: (target: string) => Promise<{ ok: boolean; path?: string; error?: string }>;
 	/** Asks the user one multiple-choice question; resolves with their answer. */
 	askUser?: (question: string, options: string[]) => Promise<string>;
+	/**
+	 * Shows an editable plan checklist and waits for the user's decision.
+	 * Resolves with the approved step list (possibly edited) or null if the
+	 * user cancelled the plan.
+	 */
+	proposePlan?: (title: string, steps: string[]) => Promise<string[] | null>;
 }
 
 export interface AgentConfig {
@@ -117,8 +123,28 @@ B — Next.js + cloud database. Sync across devices, more setup.
     changes what you will build (stack, scope, design direction). One option
     per body line; include your recommendation in the question. The run waits
     for their answer. Use at most once or twice per task, near the start.
+<tool name="propose_plan" title="Habit tracker v1">
+1. Create index.html with the page structure
+2. Create style.css with the dark theme
+3. Create script.js with habit CRUD + localStorage
+</tool>
+    Present your implementation plan as a checklist and WAIT for the user to
+    approve (they can edit the steps). The result is the final step list.
 <tool name="finish">one sentence describing what you built</tool>
     Call this only when the whole task is complete.
+
+WORKFLOW — how to run a task:
+1. UNDERSTAND first: for anything beyond a trivial edit, briefly explore the
+   workspace (list_files, read key files) before writing code.
+2. If the request leaves an important decision open (scope, stack, design
+   direction), ask ONE ask_user question — include your recommendation.
+3. PLAN: for tasks that create or change more than one file, call
+   propose_plan with 3-8 concrete steps and wait for approval. Do NOT start
+   implementing before the plan is approved.
+4. IMPLEMENT: work through the approved steps in order; call update_plan
+   after finishing each step so the user sees progress.
+5. Call finish with a one-sentence summary.
+Trivial tasks (one small file or edit) skip steps 2-3 — just do them.
 
 Rules:
 - Explore with list_files / read_file before editing existing code.
@@ -146,6 +172,10 @@ export async function runAgent(
 	// when files changed since the last check; give up blocking after 2 failures.
 	let writesSinceCheck = 0;
 	let checkFailures = 0;
+	// Plan-first enforcement: multi-file work requires an approved plan. Weak
+	// models ignore prompt guidance, so the loop enforces it mechanically.
+	let planSettled = depth > 0 || !tools.proposePlan;
+	const writtenPaths = new Set<string>();
 
 	// The step cap is a BUDGET, not a wall: when it runs out the host can ask
 	// the user and grant another round — the loop resumes with context intact.
@@ -285,7 +315,15 @@ export async function runAgent(
 						toolFailed = true;
 						break;
 					}
+					if (!planSettled && writtenPaths.size >= 1 && !writtenPaths.has(p)) {
+						observation =
+							'STOP — this task touches multiple files, so the user must approve a plan first. ' +
+							'Call propose_plan now with 3-8 concrete steps (one per line), wait for approval, then continue implementing.';
+						toolFailed = true;
+						break;
+					}
 					const note = await tools.writeFile(p, String(action.args.content ?? ''));
+					writtenPaths.add(p);
 					writesSinceCheck++;
 					observation = `Saved ${p}${typeof note === 'string' && note ? `\n${note}` : ''}`;
 					break;
@@ -420,7 +458,35 @@ export async function runAgent(
 					observation = `User answered: ${answer}`;
 					break;
 				}
-				case 'update_plan': {
+				case 'propose_plan': {
+					const planTitle = String(action.args.title ?? 'Plan');
+					const planSteps = Array.isArray(action.args.steps)
+						? (action.args.steps as string[])
+						: [];
+					if (!tools.proposePlan) {
+						observation = 'Plan display is not available — proceed step by step.';
+						break;
+					}
+					if (planSteps.length < 2) {
+						observation = 'Error: propose_plan needs at least 2 steps (one per body line).';
+						toolFailed = true;
+						break;
+					}
+					const approved = await tools.proposePlan(planTitle, planSteps);
+					planSettled = true;
+					if (approved === null) {
+						observation =
+							'The user cancelled the plan. Ask what they want instead with ask_user, or finish.';
+						toolFailed = true;
+					} else {
+						observation =
+							'Plan approved. Final steps:\n' +
+							approved.map((s, idx) => `${idx + 1}. ${s}`).join('\n') +
+							'\nImplement them in order, calling update_plan after each.';
+					}
+					break;
+				}
+			case 'update_plan': {
 					const n = parseInt(String(action.args.step ?? ''), 10);
 					if (Number.isFinite(n) && n > 0 && tools.updatePlan) {
 						tools.updatePlan(n);

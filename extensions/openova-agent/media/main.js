@@ -31,6 +31,10 @@
 	let browserLoaded = null;
 	let termBuffer = '';
 	let termStarted = false;
+	// live activity heartbeat while a run works
+	let activity = null;
+	let runStartLocal = 0;
+	let activityTimer = null;
 	// window-mode navigation
 	let view = 'chat'; // 'chat' | 'automations'
 	let sidebarSearch = null; // null = closed, string = filter
@@ -919,6 +923,13 @@
 				if (m.id === liveMsgId && liveText) {
 					box.appendChild(el('div', 'live', liveText));
 				}
+				if (running && m.role === 'assistant' && mi === sess.messages.length - 1 && !m.pendingQuestion && m.paused === undefined) {
+					const act = el('div', 'activity');
+					act.appendChild(el('span', 'spin'));
+					act.appendChild(el('span', 'activity-status', (activity && activity.status) || 'Working'));
+					act.appendChild(el('span', 'activity-meta', activityMeta()));
+					box.appendChild(act);
+				}
 				if (m.content) {
 					const body = el('div', 'body');
 					renderBody(body, m.content);
@@ -1147,7 +1158,6 @@
 			cancel.onclick = () => vscode.postMessage({ type: 'planCancel', sessionId: active, msgId: m.id });
 			actions.appendChild(cancel);
 			const approve = el('button', 'papprove', 'Approve & Run');
-			approve.disabled = running;
 			approve.onclick = () => vscode.postMessage({ type: 'planApprove', sessionId: active, msgId: m.id });
 			actions.appendChild(approve);
 			card.appendChild(actions);
@@ -1190,6 +1200,19 @@
 	const expandedWork = new Set();
 	const expandedGroups = new Set();
 	const expandedSteps = new Set();
+
+	function activityMeta() {
+		const bits = [];
+		if (activity && activity.chars > 400) {
+			bits.push((activity.chars / 1000).toFixed(1) + 'k chars');
+		}
+		if (runStartLocal) {
+			const s = Math.floor((Date.now() - runStartLocal) / 1000);
+			bits.push(s < 60 ? s + 's' : Math.floor(s / 60) + 'm ' + (s % 60) + 's');
+		}
+		// allow-any-unicode-next-line
+		return bits.length ? '· ' + bits.join(' · ') : '';
+	}
 
 	function fmtDuration(ms) {
 		if (!ms || ms < 1000) { return ''; }
@@ -1550,9 +1573,39 @@
 			}
 			case 'running':
 				running = m.running;
-				if (!m.running) { liveText = ''; liveMsgId = null; }
+				if (m.running) {
+					runStartLocal = Date.now();
+					if (!activityTimer) {
+						activityTimer = setInterval(() => {
+							const meta = document.querySelector('.activity-meta');
+							if (meta) { meta.textContent = activityMeta(); }
+						}, 1000);
+					}
+				} else {
+					liveText = '';
+					liveMsgId = null;
+					activity = null;
+					runStartLocal = 0;
+					if (activityTimer) {
+						clearInterval(activityTimer);
+						activityTimer = null;
+					}
+				}
 				render();
 				break;
+			case 'activity': {
+				activity = { status: m.status, chars: m.chars || 0 };
+				const s = document.querySelector('.activity-status');
+				if (s) {
+					// allow-any-unicode-next-line
+					s.textContent = m.status + '…';
+					const meta = document.querySelector('.activity-meta');
+					if (meta) { meta.textContent = activityMeta(); }
+				} else {
+					render();
+				}
+				break;
+			}
 			case 'live':
 				liveText = m.text;
 				liveMsgId = m.msgId;
