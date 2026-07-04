@@ -25,6 +25,7 @@ export const TOOL_NAMES = [
 	'subagent',
 	'mcp_call',
 	'screenshot',
+	'ask_user',
 	'finish'
 ];
 
@@ -74,6 +75,14 @@ function buildAction(tool: string, attrs: string, body: string): Action {
 		args.server = readAttr(attrs, 'server') ?? '';
 		args.tool = readAttr(attrs, 'tool') ?? '';
 		args.argsJson = inner || '{}';
+	} else if (tool === 'ask_user') {
+		args.question = readAttr(attrs, 'question') ?? '';
+		// one option per body line
+		args.options = inner
+			.split(/\r?\n/)
+			.map((l) => l.trim())
+			.filter(Boolean)
+			.slice(0, 6);
 	} else if (tool === 'finish') {args.summary = summary ?? (inner || 'Done.');}
 	return { tool, args };
 }

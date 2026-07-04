@@ -37,6 +37,8 @@ export interface AgentTools {
 	) => Promise<{ ok: boolean; output: string }>;
 	/** Captures a screenshot of a URL / HTML file for visual verification. */
 	screenshot?: (target: string) => Promise<{ ok: boolean; path?: string; error?: string }>;
+	/** Asks the user one multiple-choice question; resolves with their answer. */
+	askUser?: (question: string, options: string[]) => Promise<string>;
 }
 
 export interface AgentConfig {
@@ -107,6 +109,14 @@ FULL contents of the file, exactly as they should be saved to disk.
 <tool name="screenshot">http://localhost:5173 or relative/page.html</tool>
     Capture a screenshot of a URL or HTML file you built, to visually verify
     UI work. The image is attached to the conversation for the user to review.
+<tool name="ask_user" question="How should we build it? (I recommend A for a basic app.)">
+A — Single-page web app, data in localStorage. Fastest, works offline.
+B — Next.js + cloud database. Sync across devices, more setup.
+</tool>
+    Ask the user ONE multiple-choice question when a decision genuinely
+    changes what you will build (stack, scope, design direction). One option
+    per body line; include your recommendation in the question. The run waits
+    for their answer. Use at most once or twice per task, near the start.
 <tool name="finish">one sentence describing what you built</tool>
     Call this only when the whole task is complete.
 
@@ -390,6 +400,24 @@ export async function runAgent(
 					const r = await tools.callMcp(server, toolName, String(action.args.argsJson ?? '{}'));
 					observation = r.output.slice(0, 12000);
 					toolFailed = !r.ok;
+					break;
+				}
+				case 'ask_user': {
+					const question = String(action.args.question ?? '').trim();
+					const options = Array.isArray(action.args.options)
+						? (action.args.options as string[])
+						: [];
+					if (!tools.askUser) {
+						observation = 'Asking the user is not available here — use your best judgment.';
+						break;
+					}
+					if (!question) {
+						observation = 'Error: ask_user needs a question attribute.';
+						toolFailed = true;
+						break;
+					}
+					const answer = await tools.askUser(question, options);
+					observation = `User answered: ${answer}`;
 					break;
 				}
 				case 'update_plan': {

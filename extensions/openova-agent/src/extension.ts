@@ -64,6 +64,8 @@ interface UiMessage {
 	plan?: Plan;
 	/** Set while an agent run is paused at its step budget (value = steps used). */
 	paused?: number;
+	/** Set while the agent is waiting on a user answer (ask_user tool). */
+	pendingQuestion?: { qid: string; question: string; options: string[] };
 }
 
 interface Session {
@@ -375,6 +377,8 @@ class OpenovaChatViewProvider implements vscode.WebviewViewProvider {
 	private readonly pauseResolvers = new Map<string, (more: boolean) => void>();
 	/** Shell backing the Agents window Terminal pane. */
 	private term: cp.ChildProcessWithoutNullStreams | undefined;
+	/** Resolvers for ask_user questions awaiting an answer (qid → resolver). */
+	private readonly questionResolvers = new Map<string, { sessionId: string; resolve: (a: string) => void }>();
 	private automations: Automation[] = [];
 	/** One-shot view hint for the next webview init (dev harness). */
 	pendingView: string | null = null;
@@ -563,9 +567,9 @@ class OpenovaChatViewProvider implements vscode.WebviewViewProvider {
 			...s,
 			messages: s.messages.map((m) => {
 				let out = m;
-				// A paused run can't resume after a reload — don't persist the flag.
-				if (out.paused !== undefined) {
-					out = { ...out, paused: undefined };
+				// A paused run / pending question can't resume after a reload.
+				if (out.paused !== undefined || out.pendingQuestion) {
+					out = { ...out, paused: undefined, pendingQuestion: undefined };
 				}
 				if (out.writes) {
 					out = {
@@ -854,6 +858,15 @@ class OpenovaChatViewProvider implements vscode.WebviewViewProvider {
 			case 'newSession':
 				this.newSession();
 				break;
+			case 'answerQuestion': {
+				const qid = String(msg.qid ?? '');
+				const q = this.questionResolvers.get(qid);
+				if (q) {
+					this.questionResolvers.delete(qid);
+					q.resolve(String(msg.answer ?? '(no answer)'));
+				}
+				break;
+			}
 			case 'continueRun': {
 				const sid = String(msg.sessionId ?? this.activeSession ?? '');
 				const resolve = this.pauseResolvers.get(sid);
@@ -1079,6 +1092,13 @@ class OpenovaChatViewProvider implements vscode.WebviewViewProvider {
 		if (resolve) {
 			this.pauseResolvers.delete(sessionId);
 			resolve(false);
+		}
+		// So must any question the agent is waiting on.
+		for (const [qid, q] of this.questionResolvers) {
+			if (q.sessionId === sessionId) {
+				this.questionResolvers.delete(qid);
+				q.resolve('(the user stopped the run)');
+			}
 		}
 	}
 
@@ -1448,6 +1468,29 @@ class OpenovaChatViewProvider implements vscode.WebviewViewProvider {
 		};
 		const tools = createTools(host);
 		tools.check = createCheck(host);
+		tools.askUser = (question, options) =>
+			new Promise<string>((resolve) => {
+				// Headless harness: pick the first option so runs never hang.
+				if (process.env.OPENOVA_DEV_TRIGGER) {
+					const auto = options[0] ?? 'yes';
+					trace(`devAskUser auto-answered: ${auto}`);
+					resolve(auto);
+					return;
+				}
+				const qid = uid();
+				this.questionResolvers.set(qid, {
+					sessionId,
+					resolve: (answer) => {
+						this.mutateMsg(sessionId, agentMsg.id, (m) => { m.pendingQuestion = undefined; });
+						this.postSessions();
+						resolve(answer);
+					}
+				});
+				this.mutateMsg(sessionId, agentMsg.id, (m) => {
+					m.pendingQuestion = { qid, question, options };
+				});
+				this.postSessions();
+			});
 		// MCP: connect configured servers and expose their tools to this run.
 		const mcpServers = vscode.workspace
 			.getConfiguration('openova')
@@ -1499,6 +1542,7 @@ class OpenovaChatViewProvider implements vscode.WebviewViewProvider {
 				case 'write_file': return `Edited ${String(args.path ?? '')}`;
 				case 'run_command': return `$ ${String(args.cmd ?? '').slice(0, 80)}`;
 				case 'subagent': return `Subagent: ${String(args.task ?? '').slice(0, 60)}`;
+				case 'ask_user': return `Asked: ${String(args.question ?? '').slice(0, 80)}`;
 				case 'check': return 'Running checks';
 				default: return name;
 			}

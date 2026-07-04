@@ -871,6 +871,9 @@
 				if (m.plan) {
 					box.appendChild(renderPlan(m));
 				}
+				if (m.pendingQuestion) {
+					box.appendChild(renderQuestion(m.pendingQuestion));
+				}
 				if (m.paused !== undefined) {
 					const pb = el('div', 'pausedbar');
 					pb.appendChild(
@@ -1120,6 +1123,37 @@
 			actions.appendChild(approve);
 			card.appendChild(actions);
 		}
+		return card;
+	}
+
+	function renderQuestion(q) {
+		const card = el('div', 'qcard');
+		card.appendChild(el('div', 'q-head', 'Question'));
+		card.appendChild(el('div', 'q-text', q.question));
+		const answer = (a) => vscode.postMessage({ type: 'answerQuestion', qid: q.qid, answer: a });
+		const opts = el('div', 'q-opts');
+		const LETTERS = 'ABCDEF';
+		q.options.forEach(function (opt, i) {
+			const row = el('button', 'q-opt');
+			row.appendChild(el('span', 'q-letter', LETTERS[i] || String(i + 1)));
+			row.appendChild(el('span', 'q-opt-text', opt));
+			row.onclick = () => answer(opt);
+			opts.appendChild(row);
+		});
+		card.appendChild(opts);
+		const foot = el('div', 'q-foot');
+		const other = document.createElement('input');
+		other.className = 'q-other';
+		other.placeholder = 'Or type your own answer…';
+		other.onkeydown = (e) => {
+			if (e.key === 'Enter' && other.value.trim()) { answer(other.value.trim()); }
+		};
+		foot.appendChild(other);
+		const skip = el('button', 'q-skip', 'Skip');
+		skip.title = 'Let the agent decide';
+		skip.onclick = () => answer('(skipped — use your best judgment)');
+		foot.appendChild(skip);
+		card.appendChild(foot);
 		return card;
 	}
 
