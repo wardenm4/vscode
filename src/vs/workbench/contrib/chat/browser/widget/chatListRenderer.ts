@@ -91,11 +91,12 @@ import { ChatMcpAuthenticationContentPart } from './chatContentParts/chatMcpAuth
 import { ChatMcpServersStartingContentPart } from './chatContentParts/chatMcpServersStartingContentPart.js';
 import { ChatDisabledClaudeHooksContentPart } from './chatContentParts/chatDisabledClaudeHooksContentPart.js';
 import { ChatMultiDiffContentPart } from './chatContentParts/chatMultiDiffContentPart.js';
-import { ChatProgressContentPart, ChatProgressSubPart, ChatWorkingProgressContentPart } from './chatContentParts/chatProgressContentPart.js';
+import { ChatProgressContentPart, ChatWorkingProgressContentPart } from './chatContentParts/chatProgressContentPart.js';
 import { ChatPullRequestContentPart } from './chatContentParts/chatPullRequestContentPart.js';
 import { ChatQuotaExceededPart } from './chatContentParts/chatQuotaExceededPart.js';
 import { ChatCollapsibleListContentPart, ChatUsedReferencesListContentPart, CollapsibleListPool } from './chatContentParts/chatReferencesContentPart.js';
 import { ChatTaskContentPart } from './chatContentParts/chatTaskContentPart.js';
+import { ChatSystemNotificationContentPart } from './chatContentParts/chatSystemNotificationContentPart.js';
 import { ChatTextEditContentPart } from './chatContentParts/chatTextEditContentPart.js';
 import { ChatThinkingContentPart, getEffectiveThinkingDisplayMode } from './chatContentParts/chatThinkingContentPart.js';
 import { ChatSubagentContentPart } from './chatContentParts/chatSubagentContentPart.js';
@@ -228,6 +229,10 @@ interface IItemHeightChangeParams {
 
 export function shouldScheduleInitialHeightChange(normalizedHeight: number, allocatedHeight: number | undefined): boolean {
 	return typeof allocatedHeight !== 'number' || normalizedHeight > allocatedHeight;
+}
+
+export function shouldRenderInitialProgressiveContentImmediately(isComplete: boolean, hasMarkdownParts: boolean, hasRenderData: boolean): boolean {
+	return !isComplete && hasMarkdownParts && !hasRenderData;
 }
 
 const forceVerboseLayoutTracing = false
@@ -1648,13 +1653,13 @@ export class ChatListItemRenderer extends Disposable implements ITreeRenderer<Ch
 		templateData.renderedParts = [];
 
 		const label = element.systemInitiatedLabel ?? element.messageText;
-		const rendered = this.chatContentMarkdownRenderer.render(new MarkdownString(label));
-		templateData.elementDisposables.add(rendered);
-		rendered.element.classList.add('progress-step');
-
-		const progressPart = this.instantiationService.createInstance(ChatProgressSubPart, rendered.element, Codicon.check, undefined);
-		templateData.elementDisposables.add(progressPart);
-		templateData.value.appendChild(progressPart.domNode);
+		const notificationPart = this.instantiationService.createInstance(
+			ChatSystemNotificationContentPart,
+			{ kind: 'systemNotification', content: new MarkdownString(label) },
+			this.chatContentMarkdownRenderer,
+		);
+		templateData.elementDisposables.add(notificationPart);
+		templateData.value.appendChild(notificationPart.domNode);
 	}
 
 	/**
@@ -2036,9 +2041,9 @@ export class ChatListItemRenderer extends Disposable implements ITreeRenderer<Ch
 
 	private getDataForProgressiveRender(element: IChatResponseViewModel) {
 		const hasMarkdownParts = element.response.value.some(part => part.kind === 'markdownContent' && part.content.value.trim().length > 0);
-		if (!element.isComplete && hasMarkdownParts && (element.contentUpdateTimings ? element.contentUpdateTimings.lastWordCount : 0) === 0) {
+		if (shouldRenderInitialProgressiveContentImmediately(element.isComplete, hasMarkdownParts, element.renderData !== undefined)) {
 			/**
-			 * None of the content parts in the ongoing response have been rendered yet,
+			 * None of the markdown in the ongoing response has been rendered yet,
 			 * so we should render all existing parts without animation.
 			 */
 			return {
@@ -2433,6 +2438,8 @@ export class ChatListItemRenderer extends Disposable implements ITreeRenderer<Ch
 				return this.renderMultiDiffData(content, templateData, context);
 			} else if (content.kind === 'progressMessage') {
 				return this.instantiationService.createInstance(ChatProgressContentPart, content, this.chatContentMarkdownRenderer, context, undefined, undefined, undefined, undefined, content.shimmer);
+			} else if (content.kind === 'systemNotification') {
+				return this.instantiationService.createInstance(ChatSystemNotificationContentPart, content, this.chatContentMarkdownRenderer);
 			} else if (content.kind === 'working') {
 				return this.instantiationService.createInstance(ChatWorkingProgressContentPart, content, this.chatContentMarkdownRenderer, context);
 			} else if (content.kind === 'progressTask' || content.kind === 'progressTaskSerialized') {

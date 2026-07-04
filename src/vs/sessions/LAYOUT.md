@@ -100,9 +100,17 @@ The center section shows a clickable session picker widget. When a session is ac
 
 When no session is active (new chat view) the widget hides its chrome so the center is empty. Clicking opens the session switcher quick pick.
 
+When the primary side bar is hidden and at least one session is **blocked** the widget instead switches to a **requires-input** state (see [Blocked Sessions](#blocked-sessions-center) below).
+
+After the user approves a pending action on a session from the sessions list (e.g. the **Allow** button on an approval row), the widget briefly shows a green "Approved N sessions" confirmation. Each approval within the rolling 3s window increments the count and restarts the countdown; while visible it takes precedence over the requires-input state. Driven by `ISessionActionFeedbackService` (`contrib/sessions`), whose `approvedCount` observable the widget reads.
+
 ### Agent Host Filter (Left)
 
 When multiple remote agent hosts are known, a dropdown pill in the left toolbar scopes the workbench to a specific host. When no hosts are known the pill acts as a re-discover trigger.
+
+### Blocked Sessions (Center)
+
+When the primary side bar is hidden and at least one session is **blocked**, the center session picker widget (`SessionsTitleBarWidget`) switches from the active-session pill to an orange "N sessions require input" state (orange foreground, background and border), and blinks twice whenever a newly blocked session appears. A session counts as blocked when it needs input, or — while not in progress — has failing CI checks or unresolved pull request comments. Detection is owned by the `BlockedSessions` model (`contrib/blockedSessions`) that the widget instantiates, which reuses the shared, background-polled GitHub CI / review-thread models via `computePullRequestIconStatus`. Clicking the widget opens those sessions rendered exactly like the sessions list but flat — no sections, groups or workspace headers — via the reusable `SessionsFlatList` (exported from `sessionsList.ts`) in a dropdown anchored below the command center box using `IContextViewService`; clicking a row opens the session like the main list. When the side bar is visible or no session is blocked, the widget behaves as the normal active-session pill. Whether the widget enters this state is driven directly by the `BlockedSessions` model's `blockedSessions` observable together with `Parts.SIDEBAR_PART` visibility.
 
 ### Account Widget (Right)
 
@@ -129,7 +137,9 @@ A `SessionView` ([browser/parts/sessionView.ts](src/vs/sessions/browser/parts/se
 - A **chat view** below the bars, swapped in/out based on session state.
 - A floating toolbar overlay ([browser/parts/sessionHeader.ts](src/vs/sessions/browser/parts/sessionHeader.ts), `SessionViewFloatingToolbar`) shown for not-yet-created sessions in place of the header.
 
-The header and the composite bar are deliberately separate widgets: the header represents the session identity/actions and is always present, while the tab strip is a per-chat navigation concern that appears (and then stays, per the sticky rule above) once a session has multiple chats or a diverged default-chat title. They share visual tokens via `applySessionBarThemeColors` ([browser/parts/sessionBarStyles.ts](src/vs/sessions/browser/parts/sessionBarStyles.ts)) and stylesheet ([browser/parts/media/chatCompositeBar.css](src/vs/sessions/browser/parts/media/chatCompositeBar.css)). `SessionView` sums each widget's reported height to lay out the chat view below them. The header and tab strip are centered and capped to 990px via their own CSS classes (`.chat-composite-bar.session-header-bar` / `.chat-composite-bar.session-chat-tabs-bar` in [chatCompositeBar.css](src/vs/sessions/browser/parts/media/chatCompositeBar.css)). The chat view itself is still laid out at full session width so its scrollable viewport (and scrollbar) stays flush to the far-right edge; only the inner chat content (message/input cards, via `.interactive-item-container`, capped to 950px in [browser/media/style.css](src/vs/sessions/browser/media/style.css)) is width-constrained and centered via CSS.
+The header and the composite bar are deliberately separate widgets: the header represents the session identity/actions and is always present, while the tab strip is a per-chat navigation concern that appears (and then stays, per the sticky rule above) once a session has multiple chats or a diverged default-chat title. They share visual tokens via `applySessionBarThemeColors` ([browser/parts/sessionBarStyles.ts](src/vs/sessions/browser/parts/sessionBarStyles.ts)) and stylesheet ([browser/parts/media/chatCompositeBar.css](src/vs/sessions/browser/parts/media/chatCompositeBar.css)). `SessionView` sums each widget's reported height to lay out the chat view below them. The header and tab strip are centered and capped to 990px via their own CSS classes (`.chat-composite-bar.session-header-bar` / `.chat-composite-bar.session-chat-tabs-bar` in [chatCompositeBar.css](src/vs/sessions/browser/parts/media/chatCompositeBar.css)). The chat view itself is still laid out at full session width so its scrollable viewport (and scrollbar) stays flush to the far-right edge; only the inner chat content (message/input cards, via `.interactive-item-container`, capped to 950px in [browser/media/style.css](src/vs/sessions/browser/media/style.css)) is width-constrained and centered via CSS. Each constrained message row is also the positioning context for request overlays such as steering-message actions, keeping those controls anchored to the message instead of the full-width scroll viewport.
+
+**Pitfall:** absolute request overlays must not remain positioned against the full-width `.interactive-session` after message rows are independently constrained. Make the constrained row their positioning context or hover actions drift into the viewport gutter. Request rows must also override the tree's `.monaco-tl-contents { overflow: hidden; }`, otherwise controls positioned above the request are clipped at the row boundary.
 
 **Pitfall:** don't cap the chat viewport width in `SessionView` layout when you need edge-aligned scrollbars. Keep the viewport full-width and center only the inner chat content so alignment and scroll ergonomics both hold.
 
@@ -190,6 +200,16 @@ When the auxiliary bar is hidden the editor becomes the rightmost card and expan
 The Toggle Secondary Side Bar action collapses or restores the secondary side bar while the editor stays open. When a session's editor working set is restored on session switch, the editor part is revealed programmatically and the session's saved auxiliary bar visibility is honored (a side bar the user hid for a session stays hidden when returning to it).
 
 The main editor part can be explicitly revealed for workflows that target it directly.
+
+### Single-pane redesign (experimental — `sessions.layout.singlePaneDetailPanel`, default OFF)
+
+The entire third-pane redesign is gated behind the experimental setting `sessions.layout.singlePaneDetailPanel`, read **once at startup** (a window reload applies a change). When the setting is **off** (default) the Agents window renders exactly as documented above (auxiliary bar as its own grid column with its composite tab strip + title, the standard multi-diff Changes editor). When **on**, the third pane becomes a **single pane with one full-width tab bar**:
+
+- The auxiliary bar is removed from the workbench grid and **docked inside the editor part** (absolutely positioned on the right, below the editor tab strip); the grid's top-right row becomes `Sessions | Editor`, and the editor part spans the editor + detail-panel width.
+- The editor group's **title/tab strip spans the full width** while its content is inset on the right by the detail-panel width, via the concrete `EditorPart.setContentRightInset(px)` method (`EditorPart`/`EditorGroupView`; not on the `IEditorPart` interface; `0` = no-op for all other layouts).
+- A vertical **sash** on the left edge of the docked panel resizes it (`browser/workbench.ts` `_layoutDockedAuxiliaryBar` / `_ensureDockedAuxiliaryBarSash`), clamped to `[220px, editorWidth − 300px]`; the width persists via the part-sizes snapshot.
+- Changes opens as a **custom `SessionChangesEditor`** (Branch Changes dropdown + diff stats header above the embedded multi-diff), the auxiliary bar's composite tab strip + title are hidden, and `DetailPanelController` maps the active editor tab to the detail container (Changes → files + Checks, File → Explorer, Browser → hidden).
+- CSS is scoped by a `.dock-detail-panel` class on the workbench container; `:not(.dock-detail-panel)` reproduces the original grid-based styling.
 
 ---
 
@@ -261,6 +281,8 @@ Each session independently remembers whether the auxiliary bar is visible and wh
 **The side pane never opens automatically for existing sessions.** It is only shown when the user opens it; the controller never auto-reveals it on session switch or when a chat turn produces new file changes. A session with no explicit "visible" choice (including one that just converted from the new-session view to an existing session) keeps the side pane hidden until the user opens it.
 
 **Default view on new sessions:** An untitled (new-session) session opens the side pane by default — the Files view, or the Changes view once it has changes — and that choice sticks until the user changes it. When a new session is submitted (it converts to a real session while staying active) the side pane is kept as the user left it: if it was open it stays open and switches to the Changes view so changes are visible as soon as they land; if it was closed it stays closed.
+
+The Changes view's body is a vertical `SplitView` of File Changes, Other Files, and Checks. Other Files is the flexible middle pane: while it is expanded, File Changes is capped to its content height and Checks is capped to its checks content height, so Other Files receives the remaining space; when Other Files is hidden or collapsed, File Changes receives the remaining space after Checks reaches its content height. When File Changes has no changed files, it keeps a 140px minimum height for the empty state.
 
 **Editor maximized:** While the editor area is maximized (`IAgentWorkbenchLayoutService.isEditorMaximized()`), the Changes view is always shown in the auxiliary bar, **irrespective of the session's previous or saved state**. This is driven directly from the auxiliary-bar sync autorun, so it holds across session changes and changes-state updates while maximized. The forced visibility is never captured as the session's per-session preference, so when the editor is un-maximized the autorun re-runs and restores the session's real auxiliary bar state.
 
