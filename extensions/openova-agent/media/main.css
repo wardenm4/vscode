@@ -11,6 +11,20 @@ body {
 	height: 100vh;
 	overflow: hidden;
 }
+/* Native widget popups (e.g. <select> option lists) must follow the theme,
+	otherwise Windows paints them light with light text on dark themes. */
+body.vscode-dark,
+body.vscode-high-contrast {
+	color-scheme: dark;
+}
+body.vscode-light,
+body.vscode-high-contrast-light {
+	color-scheme: light;
+}
+select option {
+	background: var(--vscode-dropdown-background, #1e1e27);
+	color: var(--vscode-dropdown-foreground, var(--vscode-foreground));
+}
 #app {
 	display: flex;
 	flex-direction: column;
