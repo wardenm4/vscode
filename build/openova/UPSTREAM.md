@@ -46,6 +46,7 @@ by keeping the Openova behavior and folding in upstream's changes around it):
 - `src/vs/workbench/contrib/welcomeOnboarding/browser/onboardingVariationA.ts` — skip gate
 - `src/vs/workbench/browser/parts/editor/media/letterpress-*.svg` — logo watermarks
 - `build/gulpfile.vscode.ts`, `build/gulpfile.vscode.win32.ts`, `build/hygiene.ts` — fork guards
+- `build/npm/dirs.ts` — extensions/copilot entry is existsSync-guarded (upstream re-adds it)
 - `build/win32/code.iss` — installer branding
 - `eslint.config.js` — copilot plugin stub
 
