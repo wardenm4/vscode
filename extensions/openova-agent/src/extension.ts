@@ -68,6 +68,8 @@ interface UiMessage {
 	pendingQuestion?: { qid: string; question: string; options: string[] };
 	/** Wall-clock duration of the finished run, for "Worked for Ns". */
 	durationMs?: number;
+	/** Creation time (for the hover "Nm ago" meta row). */
+	at?: number;
 }
 
 interface Session {
@@ -1326,8 +1328,8 @@ class OpenovaChatViewProvider implements vscode.WebviewViewProvider {
 	private async sendPlan(sessionId: string, text: string, displayText = text): Promise<void> {
 		const sess = this.session(sessionId)!;
 		const wasFirstTurn = sess.messages.length === 0;
-		const userMsg: UiMessage = { id: uid(), role: 'user', content: displayText };
-		const planMsg: UiMessage = { id: uid(), role: 'assistant', content: '' };
+		const userMsg: UiMessage = { id: uid(), role: 'user', content: displayText, at: Date.now() };
+		const planMsg: UiMessage = { id: uid(), role: 'assistant', content: '', at: Date.now() };
 		if (wasFirstTurn) { sess.title = displayText.slice(0, 40); }
 		sess.updatedAt = Date.now();
 		sess.messages.push(userMsg, planMsg);
@@ -1414,8 +1416,8 @@ class OpenovaChatViewProvider implements vscode.WebviewViewProvider {
 	private async sendAsk(sessionId: string, text: string, displayText = text): Promise<void> {
 		const sess = this.session(sessionId)!;
 		const wasFirstTurn = sess.messages.length === 0;
-		const userMsg: UiMessage = { id: uid(), role: 'user', content: displayText };
-		const reply: UiMessage = { id: uid(), role: 'assistant', content: '' };
+		const userMsg: UiMessage = { id: uid(), role: 'user', content: displayText, at: Date.now() };
+		const reply: UiMessage = { id: uid(), role: 'assistant', content: '', at: Date.now() };
 		if (wasFirstTurn) { sess.title = displayText.slice(0, 40); }
 		sess.updatedAt = Date.now();
 		sess.messages.push(userMsg, reply);
@@ -1476,8 +1478,8 @@ class OpenovaChatViewProvider implements vscode.WebviewViewProvider {
 		}
 		const sess = this.session(sessionId)!;
 		const wasFirstTurn = sess.messages.length === 0;
-		const userMsg: UiMessage = { id: uid(), role: 'user', content: opts.displayText ?? text };
-		const agentMsg: UiMessage = { id: uid(), role: 'assistant', content: '', steps: [] };
+		const userMsg: UiMessage = { id: uid(), role: 'user', content: opts.displayText ?? text, at: Date.now() };
+		const agentMsg: UiMessage = { id: uid(), role: 'assistant', content: '', steps: [], at: Date.now() };
 		if (wasFirstTurn) { sess.title = text.slice(0, 40); }
 		// A new run supersedes earlier review windows (undoing an old turn after
 		// this run writes would silently wipe newer work).

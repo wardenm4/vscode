@@ -479,6 +479,37 @@ select option {
 	color: var(--vscode-foreground);
 }
 
+/* hover meta row on assistant turns */
+.msg-meta {
+	display: flex;
+	align-items: center;
+	justify-content: flex-end;
+	gap: 10px;
+	margin-top: 2px;
+	opacity: 0;
+	transition: opacity 0.12s;
+}
+.msg:hover .msg-meta {
+	opacity: 1;
+}
+.meta-age {
+	font-size: 10.5px;
+	color: var(--vscode-descriptionForeground);
+}
+.meta-copy {
+	border: none;
+	background: transparent;
+	color: var(--vscode-descriptionForeground);
+	font-size: 10.5px;
+	cursor: pointer;
+	padding: 1px 5px;
+	border-radius: 4px;
+}
+.meta-copy:hover {
+	background: var(--vscode-list-hoverBackground);
+	color: var(--vscode-foreground);
+}
+
 /* live activity heartbeat */
 .activity {
 	display: flex;

@@ -967,6 +967,19 @@
 				if (m.writes && m.writes.length && !m.reviewDismissed && !running) {
 					box.appendChild(renderReviewBar(m));
 				}
+				if (m.role === 'assistant' && m.content && !(running && mi === sess.messages.length - 1)) {
+					const meta = el('div', 'msg-meta');
+					if (m.at) { meta.appendChild(el('span', 'meta-age', age(m.at) + ' ago')); }
+					const copyBtn = el('button', 'meta-copy', 'Copy');
+					copyBtn.onclick = () => {
+						navigator.clipboard.writeText(m.content).then(function () {
+							copyBtn.textContent = 'Copied';
+							setTimeout(function () { copyBtn.textContent = 'Copy'; }, 1200);
+						});
+					};
+					meta.appendChild(copyBtn);
+					box.appendChild(meta);
+				}
 				msgs.appendChild(box);
 			}
 		}
