@@ -18,6 +18,9 @@ import type { AIProvider } from './types';
 import { createTools, createCheck, ToolHost } from './tools';
 import { ensureMcp, callMcp, disposeMcp } from './mcp';
 import { initKeys, getApiKey, setApiKey, hasApiKey } from './keys';
+import * as cp from 'child_process';
+import * as os from 'os';
+import * as path from 'path';
 
 interface UiStep {
 	id: string;
@@ -109,6 +112,31 @@ function trace(msg: string): void {
 	} catch {
 		/* ignore */
 	}
+}
+
+/**
+ * LM Studio ships a CLI (`lms`) that can wake its local server headlessly.
+ * When discovery can't reach the server, start it instead of telling the
+ * user to. Returns true if the CLI was found and invoked.
+ */
+async function tryStartLmStudioServer(): Promise<boolean> {
+	const home = os.homedir();
+	const lms = [
+		path.join(home, '.lmstudio', 'bin', 'lms.exe'),
+		path.join(home, '.lmstudio', 'bin', 'lms')
+	].find((p) => fs.existsSync(p));
+	if (!lms) { return false; }
+	trace('lmstudio: starting server via lms CLI');
+	return new Promise<boolean>((resolve) => {
+		try {
+			const child = cp.spawn(lms, ['server', 'start'], { stdio: 'ignore', windowsHide: true });
+			const timer = setTimeout(() => resolve(true), 12_000);
+			child.once('error', () => { clearTimeout(timer); resolve(false); });
+			child.once('exit', () => { clearTimeout(timer); resolve(true); });
+		} catch {
+			resolve(false);
+		}
+	});
 }
 
 export function activate(context: vscode.ExtensionContext): void {
@@ -862,13 +890,22 @@ class OpenovaChatViewProvider implements vscode.WebviewViewProvider {
 				const p = (typeof msg.provider === 'string' ? msg.provider : s.provider) as AIProvider;
 				const info = providerInfo(p);
 				const keyed = await hasApiKey(p);
-				const r = info.discover
-					? await listModels({
-						kind: info.kind,
-						baseURL: p === s.provider && s.baseUrl ? s.baseUrl : info.baseURL,
-						apiKey: await getApiKey(p)
-					})
-					: { ok: false as const, models: [], error: undefined };
+				const discoverArgs = {
+					kind: info.kind,
+					baseURL: p === s.provider && s.baseUrl ? s.baseUrl : info.baseURL,
+					apiKey: await getApiKey(p)
+				};
+				let r = info.discover
+					? await listModels(discoverArgs)
+					: { ok: false as const, models: [], error: undefined as string | undefined };
+				if (!r.ok && p === 'lmstudio' && (await tryStartLmStudioServer())) {
+					// server just woke up — poll briefly until it answers
+					for (let i = 0; i < 5 && !r.ok; i++) {
+						await new Promise((res) => setTimeout(res, 1500));
+						r = await listModels(discoverArgs);
+					}
+					trace(`lmstudio: post-start discovery ok=${r.ok} models=${r.models.length}`);
+				}
 				// Fall back to the curated list so cloud providers are usable
 				// even when their /models endpoint is gated or unreachable.
 				const models = r.ok && r.models.length ? r.models : info.models;

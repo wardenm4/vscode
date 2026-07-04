@@ -781,7 +781,8 @@
 				);
 				const hint =
 					pickerProvider === 'lmstudio'
-						? 'In LM Studio: load a model, then Developer → Start Server (port 1234).'
+						// allow-any-unicode-next-line
+						? 'Openova tried to start LM Studio\'s server automatically but couldn\'t reach it. Open LM Studio once (it installs the `lms` CLI), or start it manually: Developer → Start Server.'
 						: pickerProvider === 'ollama'
 							? 'Start Ollama (`ollama serve`) and pull a model (`ollama pull qwen3.5:9b`).'
 							: 'Make sure the server is running and the base URL is right.';
