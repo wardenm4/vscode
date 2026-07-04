@@ -462,6 +462,51 @@ body {
 	font-size: 11.5px;
 	padding: 6px;
 }
+.picker .mod-hint {
+	color: var(--vscode-descriptionForeground);
+	font-size: 10.5px;
+	line-height: 1.5;
+	padding: 2px 6px 6px;
+	opacity: 0.85;
+}
+.picker .mod-err {
+	color: var(--vscode-errorForeground);
+	font-size: 10.5px;
+	padding: 0 6px 6px;
+	word-break: break-word;
+}
+.picker .mod-head {
+	display: flex;
+	align-items: center;
+	justify-content: space-between;
+	gap: 8px;
+}
+.picker .keybtn {
+	border: 1px solid var(--vscode-input-border, rgba(128, 128, 128, 0.35));
+	background: transparent;
+	color: var(--vscode-descriptionForeground);
+	border-radius: 5px;
+	font-size: 10px;
+	padding: 1px 7px;
+	cursor: pointer;
+	text-transform: none;
+	letter-spacing: 0;
+	font-weight: 400;
+}
+.picker .keybtn:hover {
+	background: var(--vscode-list-hoverBackground);
+	color: var(--vscode-foreground);
+}
+.picker .mod-addkey {
+	margin: 2px 6px 6px;
+	border: none;
+	background: var(--vscode-button-background);
+	color: var(--vscode-button-foreground);
+	border-radius: 5px;
+	font-size: 11.5px;
+	padding: 4px 12px;
+	cursor: pointer;
+}
 .picker .effort {
 	display: flex;
 	align-items: center;
@@ -1196,6 +1241,126 @@ body {
 }
 .autom-save:hover {
 	opacity: 0.9;
+}
+
+/* customize pane: theme preview cards */
+.custz {
+	flex: 1;
+	min-height: 0;
+	overflow-y: auto;
+	display: flex;
+	justify-content: center;
+	padding: 4vh 32px 24px;
+}
+.custz-col {
+	width: 100%;
+	max-width: 640px;
+}
+.theme-grid {
+	display: grid;
+	grid-template-columns: repeat(auto-fill, minmax(190px, 1fr));
+	gap: 12px;
+	margin-bottom: 16px;
+}
+.theme-card {
+	border: 1px solid var(--vscode-input-border, rgba(128, 128, 128, 0.25));
+	border-radius: 10px;
+	overflow: hidden;
+	cursor: pointer;
+	background: var(--vscode-input-background);
+}
+.theme-card:hover {
+	border-color: var(--vscode-focusBorder);
+}
+.theme-card.active {
+	border-color: var(--vscode-button-background);
+	box-shadow: 0 0 0 1px var(--vscode-button-background);
+}
+.tp {
+	height: 108px;
+	display: flex;
+	flex-direction: column;
+}
+.tp-bar {
+	height: 18px;
+	display: flex;
+	align-items: center;
+	gap: 3px;
+	padding: 0 7px;
+	flex-shrink: 0;
+}
+.tp-dot {
+	width: 5px;
+	height: 5px;
+	border-radius: 50%;
+}
+.tp-pill {
+	margin-left: auto;
+	width: 26px;
+	height: 7px;
+	border-radius: 4px;
+}
+.tp-body {
+	flex: 1;
+	display: flex;
+	min-height: 0;
+}
+.tp-side {
+	width: 30%;
+	padding: 7px 6px;
+	display: flex;
+	flex-direction: column;
+	gap: 5px;
+}
+.tp-srow {
+	height: 4px;
+	border-radius: 2px;
+	width: 80%;
+}
+.tp-edit {
+	flex: 1;
+	padding: 8px 9px;
+	display: flex;
+	flex-direction: column;
+	gap: 6px;
+}
+.tp-code {
+	height: 4px;
+	border-radius: 2px;
+}
+.theme-foot {
+	display: flex;
+	align-items: center;
+	gap: 8px;
+	padding: 8px 11px;
+	border-top: 1px solid var(--vscode-input-border, rgba(128, 128, 128, 0.18));
+}
+.theme-name {
+	font-size: 12px;
+	font-weight: 600;
+	flex: 1;
+}
+.theme-active {
+	font-size: 9.5px;
+	font-weight: 700;
+	text-transform: uppercase;
+	letter-spacing: 0.4px;
+	color: var(--vscode-button-background);
+	border: 1px solid var(--vscode-button-background);
+	border-radius: 7px;
+	padding: 1px 7px;
+}
+.theme-browse {
+	border: 1px solid var(--vscode-input-border, rgba(128, 128, 128, 0.3));
+	background: transparent;
+	color: var(--vscode-foreground);
+	border-radius: 7px;
+	font-size: 12px;
+	padding: 6px 14px;
+	cursor: pointer;
+}
+.theme-browse:hover {
+	background: var(--vscode-list-hoverBackground);
 }
 
 /* session header + centered transcript in window mode */

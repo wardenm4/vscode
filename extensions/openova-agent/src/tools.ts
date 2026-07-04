@@ -81,6 +81,11 @@ async function approveCommand(host: ToolHost, cmd: string, dangerous: boolean): 
 	// Headless harness runs can't answer a modal — deny deterministically so
 	// verification never hangs (the model is told the user declined).
 	if (process.env.OPENOVA_DEV_TRIGGER) { return false; }
+	// Auto / bypass-permissions mode: the user opted in to running commands
+	// without per-command prompts (Cursor's "auto-run" equivalent).
+	if (vscode.workspace.getConfiguration('openova').get<string>('permissionMode', 'ask') === 'auto') {
+		return true;
+	}
 	if (!dangerous && host.sessionAllowed.has('*')) { return true; }
 	const pick = await vscode.window.showWarningMessage(
 		`Openova agent wants to run${dangerous ? ' a potentially destructive command' : ''}:`,

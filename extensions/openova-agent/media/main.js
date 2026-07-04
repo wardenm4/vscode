@@ -30,6 +30,13 @@
 	let pickerProvider = null;
 	let pickerModels = [];
 	let pickerLoading = false;
+	let pickerError = null;
+	let pickerNeedsKey = false;
+	let pickerHasKey = false;
+	let pickerLocal = false;
+	let pickerBaseURL = '';
+	let pickerDiscovered = false;
+	let currentTheme = '';
 	// @-mention state
 	let contextChips = [];
 	let wsFiles = null;
@@ -230,6 +237,8 @@
 
 		if (view === 'automations') {
 			renderAutomations(main);
+		} else if (view === 'customize') {
+			renderCustomize(main);
 		} else if (sess && sess.messages.length > 0) {
 			renderTranscript(main, sess, true);
 		} else {
@@ -264,7 +273,10 @@
 			view = 'automations';
 			render();
 		}, view === 'automations');
-		item(ICONS.sliders, 'Customize', () => vscode.postMessage({ type: 'customize' }), false);
+		item(ICONS.sliders, 'Customize', () => {
+			view = 'customize';
+			render();
+		}, view === 'customize');
 		rail.appendChild(nav);
 
 		if (sidebarSearch !== null) {
@@ -522,6 +534,80 @@
 		main.appendChild(pane);
 	}
 
+	// Bundled theme palettes for the preview cards (mirrors openova-themes).
+	const THEMES = [
+		{ name: 'Openova Dark', tb: '#17171d', sb: '#1b1b22', ed: '#141419', btn: '#7c6cf0', fg: '#e8e8ee', line: '#2c2c38' },
+		{ name: 'Openova Midnight', tb: '#0b0e1a', sb: '#0e1220', ed: '#090c16', btn: '#2f6fe0', fg: '#dfe4f2', line: '#1d2438' },
+		{ name: 'Openova Light', tb: '#f4f3f8', sb: '#f8f7fb', ed: '#ffffff', btn: '#6a5ae0', fg: '#2a2a33', line: '#e2e0ec' }
+	];
+
+	function renderCustomize(main) {
+		const pane = el('div', 'custz');
+		const col = el('div', 'custz-col');
+		col.appendChild(el('div', 'autom-title', 'Customize'));
+		col.appendChild(
+			el('div', 'autom-sub', 'Pick a look for the editor and the Agents window — everything follows the theme.')
+		);
+
+		const grid = el('div', 'theme-grid');
+		for (const t of THEMES) {
+			const card = el('div', 'theme-card' + (currentTheme === t.name ? ' active' : ''));
+			// mini window mockup drawn from the theme palette
+			const prev = el('div', 'tp');
+			prev.style.background = t.ed;
+			const bar = el('div', 'tp-bar');
+			bar.style.background = t.tb;
+			for (let i = 0; i < 3; i++) {
+				const dot = el('span', 'tp-dot');
+				dot.style.background = t.line;
+				bar.appendChild(dot);
+			}
+			const pill = el('span', 'tp-pill');
+			pill.style.background = t.btn;
+			bar.appendChild(pill);
+			prev.appendChild(bar);
+			const body = el('div', 'tp-body');
+			const side = el('div', 'tp-side');
+			side.style.background = t.sb;
+			for (let i = 0; i < 4; i++) {
+				const r = el('div', 'tp-srow');
+				r.style.background = t.line;
+				side.appendChild(r);
+			}
+			body.appendChild(side);
+			const edit = el('div', 'tp-edit');
+			const widths = [72, 46, 60, 30, 54];
+			widths.forEach((w, i) => {
+				const r = el('div', 'tp-code');
+				r.style.width = w + '%';
+				r.style.background = i === 0 ? t.btn : t.line;
+				edit.appendChild(r);
+			});
+			body.appendChild(edit);
+			prev.appendChild(body);
+			card.appendChild(prev);
+			const foot = el('div', 'theme-foot');
+			foot.appendChild(el('span', 'theme-name', t.name));
+			if (currentTheme === t.name) {
+				foot.appendChild(el('span', 'theme-active', 'Active'));
+			}
+			card.appendChild(foot);
+			card.onclick = () => {
+				currentTheme = t.name;
+				vscode.postMessage({ type: 'applyTheme', name: t.name });
+				render();
+			};
+			grid.appendChild(card);
+		}
+		col.appendChild(grid);
+
+		const browse = el('button', 'theme-browse', 'Browse all installed themes…');
+		browse.onclick = () => vscode.postMessage({ type: 'browseThemes' });
+		col.appendChild(browse);
+		pane.appendChild(col);
+		main.appendChild(pane);
+	}
+
 	function renderTranscript(main, sess, windowed) {
 		// header (sidebar mode only — the window shell has its own rail)
 		if (!windowed) {
@@ -666,10 +752,47 @@
 		}
 		panes.appendChild(provPane);
 		const modPane = el('div', 'mod-pane');
-		modPane.appendChild(el('div', 'pane-head', pickerLoading ? 'Model (discovering…)' : 'Model'));
+		const mh = el('div', 'pane-head mod-head');
+		mh.appendChild(el('span', '', pickerLoading ? 'Model (discovering…)' : 'Model'));
+		if (pickerNeedsKey && !pickerLoading) {
+			// allow-any-unicode-next-line
+			const kb = el('button', 'keybtn', pickerHasKey ? 'API key ✓' : 'Set API key…');
+			kb.title = pickerHasKey ? 'Change or clear the stored API key' : 'Store an API key (encrypted)';
+			kb.onclick = () => vscode.postMessage({ type: 'setApiKey', provider: pickerProvider });
+			mh.appendChild(kb);
+		}
+		modPane.appendChild(mh);
 		const list = el('div', 'mod-list');
 		if (!pickerModels.length && !pickerLoading) {
-			list.appendChild(el('div', 'mod-empty', 'No models found'));
+			if (pickerLocal) {
+				list.appendChild(
+					el(
+						'div',
+						'mod-empty',
+						'Can\'t reach the local server' + (pickerBaseURL ? ' at ' + pickerBaseURL : '') + '.'
+					)
+				);
+				const hint =
+					pickerProvider === 'lmstudio'
+						? 'In LM Studio: load a model, then Developer → Start Server (port 1234).'
+						: pickerProvider === 'ollama'
+							? 'Start Ollama (`ollama serve`) and pull a model (`ollama pull qwen3.5:9b`).'
+							: 'Make sure the server is running and the base URL is right.';
+				list.appendChild(el('div', 'mod-hint', hint));
+				if (pickerError) { list.appendChild(el('div', 'mod-err', pickerError)); }
+			} else if (pickerNeedsKey && !pickerHasKey) {
+				list.appendChild(el('div', 'mod-empty', 'This provider needs an API key.'));
+				const add = el('button', 'mod-addkey', 'Add API key');
+				add.onclick = () => vscode.postMessage({ type: 'setApiKey', provider: pickerProvider });
+				list.appendChild(add);
+			} else {
+				list.appendChild(el('div', 'mod-empty', 'No models found' + (pickerError ? ' — ' + pickerError : '')));
+			}
+		}
+		if (pickerModels.length && !pickerDiscovered && !pickerLoading && !pickerLocal) {
+			list.appendChild(
+				el('div', 'mod-hint', 'Suggested models (live discovery unavailable' + (pickerError ? ': ' + pickerError : '') + ')')
+			);
 		}
 		for (const m of pickerModels) {
 			const b = el('button', 'mod' + (m === settings.model && pickerProvider === settings.provider ? ' active' : ''), m);
@@ -693,6 +816,20 @@
 		}
 		eff.appendChild(seg);
 		panel.appendChild(eff);
+		const perm = el('div', 'effort');
+		perm.appendChild(el('span', 'pane-head', 'Commands'));
+		const pseg = el('div', 'seg');
+		for (const [v, label] of [['ask', 'Ask first'], ['auto', 'Auto-run']]) {
+			const b = el('button', (settings.permissionMode || 'ask') === v ? 'active' : '', label);
+			b.title =
+				v === 'auto'
+					? 'Bypass permission prompts — the agent runs terminal commands without asking'
+					: 'Ask before running commands the safety gate doesn\'t auto-allow';
+			b.onclick = () => vscode.postMessage({ type: 'setSettings', patch: { permissionMode: v } });
+			pseg.appendChild(b);
+		}
+		perm.appendChild(pseg);
+		panel.appendChild(perm);
 		return panel;
 	}
 
@@ -887,6 +1024,20 @@
 	// ---- state + host messages ----
 	const state = vscode.getState() || { mode: 'agent' };
 
+	function applyView(v) {
+		if (!v) { return; }
+		if (v.indexOf('picker:') === 0) {
+			// dev-harness hook: open the model picker on a provider
+			pickerOpen = true;
+			pickerProvider = v.slice(7);
+			pickerModels = [];
+			pickerLoading = true;
+			vscode.postMessage({ type: 'listModels', provider: pickerProvider });
+		} else {
+			view = v;
+		}
+	}
+
 	window.addEventListener('message', (e) => {
 		const m = e.data;
 		switch (m.type) {
@@ -900,7 +1051,12 @@
 				automations = m.automations || [];
 				repos = m.repos || [];
 				repoCurrent = m.repoCurrent || null;
-				if (m.view) { view = m.view; }
+				currentTheme = m.theme || '';
+				if (m.view) { applyView(m.view); }
+				render();
+				break;
+			case 'showView':
+				applyView(m.view);
 				render();
 				break;
 			case 'automations':
@@ -929,7 +1085,19 @@
 				if (m.provider === pickerProvider) {
 					pickerModels = m.models || [];
 					pickerLoading = false;
+					pickerError = m.error || null;
+					pickerNeedsKey = !!m.needsKey;
+					pickerHasKey = !!m.hasKey;
+					pickerLocal = !!m.local;
+					pickerBaseURL = m.baseURL || '';
+					pickerDiscovered = !!m.discovered;
+					const pv = providers.find((p) => p.id === m.provider);
+					if (pv) { pv.hasKey = !!m.hasKey; }
 				}
+				render();
+				break;
+			case 'theme':
+				currentTheme = m.current || '';
 				render();
 				break;
 			case 'workspaceFiles': {

@@ -109,6 +109,7 @@ export type AIProvider =
 	| 'openrouter'
 	| 'mistral'
 	| 'opencode'
+	| 'opencode-go'
 	| 'lmstudio'
 	| 'ollama'
 	| 'openai-compatible';

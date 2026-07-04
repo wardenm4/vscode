@@ -100,12 +100,26 @@
             "openrouter",
             "mistral",
             "opencode",
+            "opencode-go",
             "lmstudio",
             "ollama",
             "openai-compatible"
           ],
           "default": "ollama",
           "description": "AI provider for chat and agent runs."
+        },
+        "openova.permissionMode": {
+          "type": "string",
+          "enum": [
+            "ask",
+            "auto"
+          ],
+          "enumDescriptions": [
+            "Ask before running commands the safety gate doesn't auto-allow.",
+            "Bypass permission prompts — the agent runs commands without asking (use with care)."
+          ],
+          "default": "ask",
+          "description": "How agent-run terminal commands are approved."
         },
         "openova.model": {
           "type": "string",

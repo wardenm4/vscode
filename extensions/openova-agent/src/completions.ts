@@ -8,6 +8,7 @@
 // ported from the standalone Openova app's inline completions.
 import * as vscode from 'vscode';
 import { complete, abortRequest } from './lib/ai';
+import { getApiKey } from './keys';
 import type { AIProvider } from './types';
 
 const uid = (): string => Math.random().toString(36).slice(2);
@@ -37,6 +38,7 @@ export async function completeAtPosition(
 		requestId,
 		provider: s.provider,
 		baseURL: s.baseUrl || undefined,
+		apiKey: await getApiKey(s.provider),
 		model: s.model,
 		system:
 			'You are a code completion engine. Given code before and after a cursor, output ONLY the text ' +

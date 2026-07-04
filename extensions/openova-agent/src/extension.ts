@@ -17,6 +17,7 @@ import { lineDiff } from './lib/diff';
 import type { AIProvider } from './types';
 import { createTools, createCheck, ToolHost } from './tools';
 import { ensureMcp, callMcp, disposeMcp } from './mcp';
+import { initKeys, getApiKey, setApiKey, hasApiKey } from './keys';
 
 interface UiStep {
 	id: string;
@@ -112,6 +113,7 @@ function trace(msg: string): void {
 
 export function activate(context: vscode.ExtensionContext): void {
 	trace('activate');
+	initKeys(context);
 	const provider = new OpenovaChatViewProvider(context);
 	registerTabCompletions(context);
 	// Automations scheduler: a minute tick runs whatever is due.
@@ -177,6 +179,7 @@ export function activate(context: vscode.ExtensionContext): void {
 								requestId: uid(),
 								provider: cfg.get<string>('provider', 'ollama') as AIProvider,
 								baseURL: cfg.get<string>('baseUrl', '') || undefined,
+								apiKey: await getApiKey(cfg.get<string>('provider', 'ollama') as AIProvider),
 								model: cfg.get<string>('model', 'qwen3.5:9b'),
 								system:
 									'You are an expert code editor. Rewrite ONLY the provided code section per the instruction. ' +
@@ -260,6 +263,11 @@ export function activate(context: vscode.ExtensionContext): void {
 					if (req.agentsWindow) {
 						await provider.openAgentsWindow();
 						trace('devAgentsWindow opened');
+						if (req.showView) {
+							// the panel may have been restored (already initialized) —
+							// deliver the view hint directly too
+							setTimeout(() => provider.postView(String(req.showView)), 1500);
+						}
 					}
 					if (req.automation) {
 						provider.saveAutomation({
@@ -382,6 +390,10 @@ class OpenovaChatViewProvider implements vscode.WebviewViewProvider {
 		).sort((a, b) =>
 			a.path === cur ? -1 : b.path === cur ? 1 : b.lastOpened - a.lastOpened
 		);
+	}
+
+	postView(view: string): void {
+		this.post({ type: 'showView', view });
 	}
 
 	private postRepos(): void {
@@ -570,13 +582,14 @@ class OpenovaChatViewProvider implements vscode.WebviewViewProvider {
 		this.post({ type: 'queue', sessionId, items: this.queues.get(sessionId) ?? [] });
 	}
 
-	private settings(): { provider: AIProvider; model: string; effort: string; baseUrl: string } {
+	private settings(): { provider: AIProvider; model: string; effort: string; baseUrl: string; permissionMode: string } {
 		const cfg = vscode.workspace.getConfiguration('openova');
 		return {
 			provider: cfg.get<string>('provider', 'ollama') as AIProvider,
 			model: cfg.get<string>('model', 'qwen3.5:9b'),
 			effort: cfg.get<string>('reasoningEffort', 'off'),
-			baseUrl: cfg.get<string>('baseUrl', '')
+			baseUrl: cfg.get<string>('baseUrl', ''),
+			permissionMode: cfg.get<string>('permissionMode', 'ask')
 		};
 	}
 
@@ -673,17 +686,27 @@ class OpenovaChatViewProvider implements vscode.WebviewViewProvider {
 	private async onMessage(msg: Record<string, unknown>): Promise<void> {
 		switch (msg.type) {
 			case 'ready': {
+				const providers = await Promise.all(
+					Object.values(PROVIDERS).map(async (p) => ({
+						id: p.id,
+						label: p.label,
+						needsKey: p.needsKey,
+						local: p.local,
+						hasKey: p.needsKey ? await hasApiKey(p.id) : false
+					}))
+				);
 				this.post({
 					type: 'init',
 					sessions: this.sessions,
 					active: this.activeSession,
 					settings: this.settings(),
 					workspace: vscode.workspace.workspaceFolders?.[0]?.name ?? null,
-					providers: Object.values(PROVIDERS).map((p) => ({ id: p.id, label: p.label })),
+					providers,
 					queue: this.activeSession ? (this.queues.get(this.activeSession) ?? []) : [],
 					automations: this.automations,
 					repos: this.repoList(),
 					repoCurrent: vscode.workspace.workspaceFolders?.[0]?.uri.fsPath ?? null,
+					theme: vscode.workspace.getConfiguration('workbench').get<string>('colorTheme', ''),
 					view: this.pendingView
 				});
 				this.pendingView = null;
@@ -826,7 +849,7 @@ class OpenovaChatViewProvider implements vscode.WebviewViewProvider {
 				const cfg = vscode.workspace.getConfiguration('openova');
 				const patch = (msg.patch ?? {}) as Record<string, string>;
 				for (const [key, val] of Object.entries(patch)) {
-					if (['provider', 'model', 'reasoningEffort', 'baseUrl'].includes(key)) {
+					if (['provider', 'model', 'reasoningEffort', 'baseUrl', 'permissionMode'].includes(key)) {
 						await cfg.update(key, val, vscode.ConfigurationTarget.Global);
 					}
 				}
@@ -838,14 +861,59 @@ class OpenovaChatViewProvider implements vscode.WebviewViewProvider {
 				const s = this.settings();
 				const p = (typeof msg.provider === 'string' ? msg.provider : s.provider) as AIProvider;
 				const info = providerInfo(p);
-				const r = await listModels({
-					kind: info.kind,
-					baseURL: p === s.provider && s.baseUrl ? s.baseUrl : info.baseURL,
-					apiKey: undefined
+				const keyed = await hasApiKey(p);
+				const r = info.discover
+					? await listModels({
+						kind: info.kind,
+						baseURL: p === s.provider && s.baseUrl ? s.baseUrl : info.baseURL,
+						apiKey: await getApiKey(p)
+					})
+					: { ok: false as const, models: [], error: undefined };
+				// Fall back to the curated list so cloud providers are usable
+				// even when their /models endpoint is gated or unreachable.
+				const models = r.ok && r.models.length ? r.models : info.models;
+				this.post({
+					type: 'models',
+					provider: p,
+					models,
+					discovered: r.ok,
+					error: r.ok ? undefined : r.error,
+					needsKey: info.needsKey,
+					hasKey: keyed,
+					local: info.local,
+					baseURL: info.baseURL
 				});
-				this.post({ type: 'models', provider: p, models: r.ok ? r.models : [], error: r.error });
 				break;
 			}
+			case 'setApiKey': {
+				const p = String(msg.provider ?? '') as AIProvider;
+				const info = providerInfo(p);
+				if (!info.secretKey) { break; }
+				const value = await vscode.window.showInputBox({
+					title: `${info.label} API key`,
+					prompt: `Stored encrypted in this profile. Leave empty to clear.`,
+					password: true,
+					ignoreFocusOut: true
+				});
+				if (value === undefined) { break; } // cancelled
+				await setApiKey(p, value.trim() || undefined);
+				// refresh the picker for this provider
+				await this.onMessage({ type: 'listModels', provider: p });
+				break;
+			}
+			case 'applyTheme': {
+				const name = String(msg.name ?? '');
+				if (name) {
+					await vscode.workspace
+						.getConfiguration('workbench')
+						.update('colorTheme', name, vscode.ConfigurationTarget.Global);
+					this.post({ type: 'theme', current: name });
+				}
+				break;
+			}
+			case 'browseThemes':
+				void vscode.commands.executeCommand('workbench.action.selectTheme');
+				break;
 			case 'dismissReview':
 				this.mutateMsg(String(msg.sessionId), String(msg.msgId), (m) => {
 					m.reviewDismissed = true;
@@ -953,6 +1021,7 @@ class OpenovaChatViewProvider implements vscode.WebviewViewProvider {
 					requestId: uid(),
 					provider: s.provider,
 					baseURL: s.baseUrl || undefined,
+					apiKey: await getApiKey(s.provider),
 					model: s.model,
 					system:
 						'You name coding chats. Reply with ONLY a concise 3-6 word title for the conversation. No quotes, no trailing punctuation, no explanations.',
@@ -1050,6 +1119,7 @@ class OpenovaChatViewProvider implements vscode.WebviewViewProvider {
 				requestId: run.requestId!,
 				provider: s.provider,
 				baseURL: s.baseUrl || undefined,
+				apiKey: await getApiKey(s.provider),
 				model: s.model,
 				system:
 					'You are a senior software engineer planning a coding task. Respond with ONLY this exact format:\n' +
@@ -1142,6 +1212,7 @@ class OpenovaChatViewProvider implements vscode.WebviewViewProvider {
 				requestId: run.requestId!,
 				provider: s.provider,
 				baseURL: s.baseUrl || undefined,
+				apiKey: await getApiKey(s.provider),
 				model: s.model,
 				system:
 					'You are Openova, an expert AI coding assistant inside a code editor. Be concise and direct.',
@@ -1298,6 +1369,7 @@ class OpenovaChatViewProvider implements vscode.WebviewViewProvider {
 				{
 					provider: s.provider,
 					baseURL: s.baseUrl || undefined,
+					apiKey: await getApiKey(s.provider),
 					model: s.model,
 					maxTokens: 8192,
 					extraRules: mcpRules || undefined

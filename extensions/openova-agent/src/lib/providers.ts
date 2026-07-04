@@ -85,6 +85,17 @@ export const PROVIDERS: Record<AIProvider, ProviderInfo> = {
 		models: ['claude-sonnet-4', 'gpt-4o', 'qwen3-coder'],
 		discover: true
 	},
+	'opencode-go': {
+		id: 'opencode-go',
+		label: 'OpenCode Go (subscription)',
+		baseURL: 'https://opencode.ai/zen/v1',
+		needsKey: true,
+		secretKey: 'opencode-go',
+		kind: 'openai',
+		local: false,
+		models: ['claude-sonnet-4', 'claude-opus-4', 'gpt-5', 'qwen3-coder', 'kimi-k2'],
+		discover: true
+	},
 	lmstudio: {
 		id: 'lmstudio',
 		label: 'LM Studio (local)',
