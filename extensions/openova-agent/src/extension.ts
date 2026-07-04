@@ -82,6 +82,13 @@ interface Automation {
 	lastRun?: number;
 }
 
+interface RepoEntry {
+	path: string;
+	name: string;
+	lastOpened: number;
+	sessions: { id: string; title: string; updatedAt?: number }[];
+}
+
 interface RunState {
 	stop: boolean;
 	requestId: string | null;
@@ -341,6 +348,48 @@ class OpenovaChatViewProvider implements vscode.WebviewViewProvider {
 			this.newSessionInternal();
 		}
 		this.automations = context.workspaceState.get<Automation[]>('openova.automations', []);
+		this.updateRepoRegistry();
+	}
+
+	// ---- cross-repo registry (Agents window Repositories rail) ----------------
+
+	private updateRepoRegistry(): void {
+		const folder = vscode.workspace.workspaceFolders?.[0];
+		if (!folder) { return; }
+		const reg = { ...this.context.globalState.get<Record<string, RepoEntry>>('openova.repoRegistry', {}) };
+		reg[folder.uri.fsPath] = {
+			path: folder.uri.fsPath,
+			name: folder.name,
+			lastOpened: Date.now(),
+			sessions: this.sessions
+				.filter((s) => s.messages.length > 0)
+				.slice(0, 20)
+				.map((s) => ({ id: s.id, title: s.title, updatedAt: s.updatedAt }))
+		};
+		const keep = Object.values(reg)
+			.sort((a, b) => b.lastOpened - a.lastOpened)
+			.slice(0, 8);
+		void this.context.globalState.update(
+			'openova.repoRegistry',
+			Object.fromEntries(keep.map((e) => [e.path, e]))
+		);
+	}
+
+	private repoList(): RepoEntry[] {
+		const cur = vscode.workspace.workspaceFolders?.[0]?.uri.fsPath;
+		return Object.values(
+			this.context.globalState.get<Record<string, RepoEntry>>('openova.repoRegistry', {})
+		).sort((a, b) =>
+			a.path === cur ? -1 : b.path === cur ? 1 : b.lastOpened - a.lastOpened
+		);
+	}
+
+	private postRepos(): void {
+		this.post({
+			type: 'repos',
+			repos: this.repoList(),
+			repoCurrent: vscode.workspace.workspaceFolders?.[0]?.uri.fsPath ?? null
+		});
 	}
 
 	// ---- automations ----------------------------------------------------------
@@ -450,6 +499,8 @@ class OpenovaChatViewProvider implements vscode.WebviewViewProvider {
 			sessions: sanitized,
 			active: this.activeSession
 		});
+		this.updateRepoRegistry();
+		this.postRepos();
 	}
 
 	private post(msg: Record<string, unknown>): void {
@@ -631,9 +682,28 @@ class OpenovaChatViewProvider implements vscode.WebviewViewProvider {
 					providers: Object.values(PROVIDERS).map((p) => ({ id: p.id, label: p.label })),
 					queue: this.activeSession ? (this.queues.get(this.activeSession) ?? []) : [],
 					automations: this.automations,
+					repos: this.repoList(),
+					repoCurrent: vscode.workspace.workspaceFolders?.[0]?.uri.fsPath ?? null,
 					view: this.pendingView
 				});
 				this.pendingView = null;
+				break;
+			}
+			case 'openRepoFolder': {
+				const p = String(msg.path ?? '');
+				if (p) {
+					void vscode.commands.executeCommand('vscode.openFolder', vscode.Uri.file(p), {
+						forceNewWindow: false
+					});
+				}
+				break;
+			}
+			case 'forgetRepo': {
+				const p = String(msg.path ?? '');
+				const reg = { ...this.context.globalState.get<Record<string, RepoEntry>>('openova.repoRegistry', {}) };
+				delete reg[p];
+				void this.context.globalState.update('openova.repoRegistry', reg);
+				this.postRepos();
 				break;
 			}
 			case 'automationSave':

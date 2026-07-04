@@ -834,15 +834,43 @@ body {
 	padding: 4px 9px;
 	font-size: 12.5px;
 	color: var(--vscode-foreground);
+	border-radius: 6px;
+}
+.repo-name:not(.current) {
+	cursor: pointer;
+	color: var(--vscode-descriptionForeground);
+	margin-top: 6px;
+}
+.repo-name:not(.current):hover {
+	background: var(--vscode-list-hoverBackground);
+	color: var(--vscode-foreground);
+}
+.repo-name.current {
+	font-weight: 600;
 }
 .repo-name svg {
 	opacity: 0.7;
 	flex-shrink: 0;
 }
-.repo-name span {
+.repo-name .rn-label {
+	flex: 1;
+	min-width: 0;
 	overflow: hidden;
 	text-overflow: ellipsis;
 	white-space: nowrap;
+}
+.rn-forget {
+	border: none;
+	background: transparent;
+	color: var(--vscode-descriptionForeground);
+	font-size: 9px;
+	cursor: pointer;
+	padding: 0 2px;
+	visibility: hidden;
+	flex-shrink: 0;
+}
+.repo-name:hover .rn-forget {
+	visibility: visible;
 }
 .rail-sess {
 	display: flex;

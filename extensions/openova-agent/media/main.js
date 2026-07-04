@@ -19,6 +19,8 @@
 	let queue = [];
 	let draft = '';
 	let automations = [];
+	let repos = [];
+	let repoCurrent = null;
 	// window-mode navigation
 	let view = 'chat'; // 'chat' | 'automations'
 	let sidebarSearch = null; // null = closed, string = filter
@@ -307,39 +309,69 @@
 	function renderRailSessions(rail) {
 		const scroller = rail.querySelector('.rail-scroll');
 		scroller.textContent = '';
-		const repo = el('div', 'repo');
-		const rh = el('div', 'repo-name');
-		rh.appendChild(icon(ICONS.folder, 13));
-		rh.appendChild(el('span', '', workspace || 'No folder open'));
-		repo.appendChild(rh);
-		scroller.appendChild(repo);
-
 		const q = (sidebarSearch || '').toLowerCase();
-		const list = sessions.filter(
-			(s) => s.messages.length > 0 && (!q || (s.title || '').toLowerCase().includes(q))
-		);
-		if (!list.length) {
-			scroller.appendChild(el('div', 'rail-empty', q ? 'No matches' : 'No agents yet'));
-			return;
+
+		// One group per known repo — current workspace first with live
+		// sessions, other repos from the cross-workspace registry.
+		const groups = repos.length
+			? repos
+			: [{ path: null, name: workspace || 'No folder open', sessions: [] }];
+		let shownAny = false;
+		for (const repo of groups) {
+			const isCurrent = repo.path === repoCurrent || repo.path === null;
+			const rh = el('div', 'repo-name' + (isCurrent ? ' current' : ''));
+			rh.appendChild(icon(ICONS.folder, 13));
+			rh.appendChild(el('span', 'rn-label', repo.name));
+			if (!isCurrent) {
+				// allow-any-unicode-next-line
+				const forget = el('button', 'rn-forget', '✕');
+				forget.title = 'Remove from list';
+				forget.onclick = (e) => {
+					e.stopPropagation();
+					vscode.postMessage({ type: 'forgetRepo', path: repo.path });
+				};
+				rh.appendChild(forget);
+				rh.title = 'Open ' + repo.path;
+				rh.onclick = () => vscode.postMessage({ type: 'openRepoFolder', path: repo.path });
+			} else {
+				rh.title = repo.path || '';
+			}
+			scroller.appendChild(rh);
+
+			const list = (isCurrent
+				? sessions.filter((s) => s.messages.length > 0)
+				: repo.sessions || []
+			).filter((s) => !q || (s.title || '').toLowerCase().includes(q));
+			if (isCurrent && !list.length) {
+				scroller.appendChild(el('div', 'rail-empty', q ? 'No matches' : 'No agents yet'));
+			}
+			for (const s of list) {
+				shownAny = true;
+				const isActive = isCurrent && s.id === active && view === 'chat';
+				const row = el('div', 'rail-sess' + (isActive ? ' active' : ''));
+				row.appendChild(el('span', 'rs-title', s.title || 'Agent'));
+				row.appendChild(el('span', 'rs-age', age(s.updatedAt)));
+				if (isCurrent) {
+					// allow-any-unicode-next-line
+					const x = el('button', 'rs-x', '✕');
+					x.title = 'Delete';
+					x.onclick = (e) => {
+						e.stopPropagation();
+						vscode.postMessage({ type: 'deleteSession', id: s.id });
+					};
+					row.appendChild(x);
+					row.onclick = () => {
+						view = 'chat';
+						vscode.postMessage({ type: 'switchSession', id: s.id });
+					};
+				} else {
+					row.title = 'Open ' + repo.name;
+					row.onclick = () => vscode.postMessage({ type: 'openRepoFolder', path: repo.path });
+				}
+				scroller.appendChild(row);
+			}
 		}
-		for (const s of list) {
-			const row = el('div', 'rail-sess' + (s.id === active && view === 'chat' ? ' active' : ''));
-			row.appendChild(el('span', 'rs-title', s.title || 'Agent'));
-			row.appendChild(el('span', 'rs-age', age(s.updatedAt)));
-			// allow-any-unicode-next-line
-			const x = el('button', 'rs-x', '✕');
-			x.title = 'Delete';
-			x.onclick = (e) => {
-				e.stopPropagation();
-				vscode.postMessage({ type: 'deleteSession', id: s.id });
-			};
-			row.appendChild(x);
-			row.onclick = () => {
-				view = 'chat';
-				vscode.postMessage({ type: 'switchSession', id: s.id });
-			};
-			scroller.appendChild(row);
-		}
+		void shownAny;
 	}
 
 	function renderHome(main) {
@@ -866,11 +898,18 @@
 				workspace = m.workspace;
 				queue = m.queue || [];
 				automations = m.automations || [];
+				repos = m.repos || [];
+				repoCurrent = m.repoCurrent || null;
 				if (m.view) { view = m.view; }
 				render();
 				break;
 			case 'automations':
 				automations = m.items || [];
+				render();
+				break;
+			case 'repos':
+				repos = m.repos || [];
+				repoCurrent = m.repoCurrent || null;
 				render();
 				break;
 			case 'sessions':
