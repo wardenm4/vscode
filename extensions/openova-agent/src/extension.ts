@@ -379,6 +379,8 @@ class OpenovaChatViewProvider implements vscode.WebviewViewProvider {
 	private readonly pauseResolvers = new Map<string, (more: boolean) => void>();
 	/** Shell backing the Agents window Terminal pane. */
 	private term: cp.ChildProcessWithoutNullStreams | undefined;
+	/** Whether the Agents panel is known to live in its own OS window. */
+	private panelFloating = false;
 	/** Resolvers for ask_user questions awaiting an answer (qid → resolver). */
 	private readonly questionResolvers = new Map<string, { sessionId: string; resolve: (a: string) => void }>();
 	/** Resolvers for in-run propose_plan cards awaiting approval (sessionId). */
@@ -625,15 +627,49 @@ class OpenovaChatViewProvider implements vscode.WebviewViewProvider {
 			void this.onMessage(msg);
 		});
 		panel.onDidDispose(() => {
-			if (this.panel === panel) { this.panel = undefined; }
+			if (this.panel === panel) {
+				this.panel = undefined;
+				this.panelFloating = false;
+			}
 		});
 		this.panel = panel;
+		// A deserialized panel may have been restored as a TAB in the IDE —
+		// we can't tell which window it landed in, so the next
+		// openAgentsWindow call floats it to be sure.
+		this.panelFloating = false;
+	}
+
+	/** Move the panel into its own OS window (tracked via panelFloating). */
+	private async floatPanel(panel: vscode.WebviewPanel): Promise<void> {
+		// The move targets the ACTIVE editor — during startup another editor
+		// (e.g. Welcome) can win that slot, so wait until it's really us.
+		if (!panel.active) {
+			await new Promise<void>((resolve) => {
+				const d = panel.onDidChangeViewState(() => {
+					if (panel.active) { d.dispose(); resolve(); }
+				});
+				setTimeout(() => { d.dispose(); resolve(); }, 1500);
+			});
+		}
+		panel.reveal(vscode.ViewColumn.One, false);
+		try {
+			await vscode.commands.executeCommand('workbench.action.moveEditorToNewWindow');
+			this.panelFloating = true;
+			trace('agents panel floated to its own window');
+		} catch {
+			// aux windows unavailable — the in-tab panel still works
+		}
 	}
 
 	/** Separate-OS-window mission control (Cursor-style) — same engine as the sidebar view. */
 	async openAgentsWindow(): Promise<void> {
 		if (this.panel) {
+			// Focus it — and if it's (or might be) sitting as a tab inside the
+			// IDE window, free it into its own window now.
 			this.panel.reveal();
+			if (!this.panelFloating) {
+				await this.floatPanel(this.panel);
+			}
 			return;
 		}
 		const panel = vscode.window.createWebviewPanel(
@@ -648,22 +684,7 @@ class OpenovaChatViewProvider implements vscode.WebviewViewProvider {
 		);
 		this.adoptPanel(panel);
 		// Pop the panel out into its own OS window like Cursor's agent app.
-		// During startup another editor (e.g. Welcome) can win the active slot,
-		// and the move targets the ACTIVE editor — wait until it's really us.
-		if (!panel.active) {
-			await new Promise<void>((resolve) => {
-				const d = panel.onDidChangeViewState(() => {
-					if (panel.active) { d.dispose(); resolve(); }
-				});
-				setTimeout(() => { d.dispose(); resolve(); }, 1500);
-			});
-		}
-		panel.reveal(vscode.ViewColumn.One, false);
-		try {
-			await vscode.commands.executeCommand('workbench.action.moveEditorToNewWindow');
-		} catch {
-			// aux windows unavailable — the in-tab panel still works
-		}
+		await this.floatPanel(panel);
 	}
 
 	private postSessions(): void {
