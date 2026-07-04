@@ -12,6 +12,7 @@ import * as path from 'path';
 import * as cp from 'child_process';
 import type { AgentTools } from './lib/agent';
 import { classifyCommand } from './lib/commandGate';
+import { isDevRunActive } from './devMode';
 
 const EXCLUDE = '{**/node_modules/**,**/.git/**,**/out/**,**/dist/**,**/build/**,**/.openova/**}';
 
@@ -79,8 +80,9 @@ async function runShell(
 /** Ask the user to approve a command the gate didn't auto-allow. */
 async function approveCommand(host: ToolHost, cmd: string, dangerous: boolean): Promise<boolean> {
 	// Headless harness runs can't answer a modal — deny deterministically so
-	// verification never hangs (the model is told the user declined).
-	if (process.env.OPENOVA_DEV_TRIGGER) { return false; }
+	// verification never hangs (the model is told the user declined). Scoped
+	// to the harness's own run: user turns in the same instance prompt normally.
+	if (isDevRunActive()) { return false; }
 	// Auto / bypass-permissions mode: the user opted in to running commands
 	// without per-command prompts (Cursor's "auto-run" equivalent).
 	if (vscode.workspace.getConfiguration('openova').get<string>('permissionMode', 'ask') === 'auto') {

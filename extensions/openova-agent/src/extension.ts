@@ -18,6 +18,7 @@ import type { AIProvider } from './types';
 import { createTools, createCheck, ToolHost } from './tools';
 import { ensureMcp, callMcp, disposeMcp } from './mcp';
 import { initKeys, getApiKey, setApiKey, hasApiKey } from './keys';
+import { setDevRunActive, isDevRunActive } from './devMode';
 import * as cp from 'child_process';
 import * as os from 'os';
 import * as path from 'path';
@@ -278,6 +279,9 @@ export function activate(context: vscode.ExtensionContext): void {
 	if (triggerPath) {
 		setTimeout(() => {
 			void (async () => {
+				// Harness behavior applies ONLY while this triggered work runs —
+				// user turns in the same instance behave completely normally.
+				setDevRunActive(true);
 				try {
 					if (!fs.existsSync(triggerPath)) { return; }
 					const req = JSON.parse(fs.readFileSync(triggerPath, 'utf8')) as {
@@ -357,6 +361,8 @@ export function activate(context: vscode.ExtensionContext): void {
 					}
 				} catch (e) {
 					trace(`devTrigger error ${e instanceof Error ? e.message : String(e)}`);
+				} finally {
+					setDevRunActive(false);
 				}
 			})();
 		}, 3000);
@@ -1553,7 +1559,7 @@ class OpenovaChatViewProvider implements vscode.WebviewViewProvider {
 		tools.askUser = (question, options) =>
 			new Promise<string>((resolve) => {
 				// Headless harness: pick the first option so runs never hang.
-				if (process.env.OPENOVA_DEV_TRIGGER) {
+				if (isDevRunActive()) {
 					const auto = options[0] ?? 'yes';
 					trace(`devAskUser auto-answered: ${auto}`);
 					resolve(auto);
@@ -1618,7 +1624,7 @@ class OpenovaChatViewProvider implements vscode.WebviewViewProvider {
 		tools.proposePlan = (planTitle, stepTexts) =>
 			new Promise<string[] | null>((resolve) => {
 				// Headless harness: auto-approve so runs never hang.
-				if (process.env.OPENOVA_DEV_TRIGGER) {
+				if (isDevRunActive()) {
 					trace(`devProposePlan auto-approved: ${planTitle} (${stepTexts.length} steps)`);
 					this.mutateMsg(sessionId, agentMsg.id, (m) => {
 						m.plan = {
@@ -1759,7 +1765,7 @@ class OpenovaChatViewProvider implements vscode.WebviewViewProvider {
 							trace(`agent paused after ${stepsUsed} steps`);
 							// Headless harness: prove the resume path once, then stop —
 							// a modal-less run must never wait forever.
-							if (process.env.OPENOVA_DEV_TRIGGER) {
+							if (isDevRunActive()) {
 								const more = devContinues++ < 1;
 								trace(`devPause: auto-${more ? 'continue' : 'stop'}`);
 								resolve(more);

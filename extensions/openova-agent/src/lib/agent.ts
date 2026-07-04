@@ -141,8 +141,10 @@ WORKFLOW — how to run a task:
    only explore files if the answer genuinely requires reading them.
 1. UNDERSTAND first: for anything beyond a trivial edit, briefly explore the
    workspace (list_files, read key files) before writing code.
-2. If the request leaves an important decision open (scope, stack, design
-   direction), ask ONE ask_user question — include your recommendation.
+2. For a NEW app or feature where scope, style or priorities are not fully
+   specified, ask exactly ONE ask_user question BEFORE planning (offer 2-4
+   concrete directions and include your recommendation). Skip only when the
+   user already spelled out what they want.
 3. PLAN: for tasks that create or change more than one file, call
    propose_plan with 3-8 concrete steps and wait for approval. Do NOT start
    implementing before the plan is approved.
@@ -152,6 +154,10 @@ WORKFLOW — how to run a task:
 Trivial tasks (one small file or edit) skip steps 2-3 — just do them.
 
 Rules:
+- QUALITY BAR: ship polished, production-looking work — complete stylesheets
+  actually linked from the HTML, real layout and spacing, consistent colors,
+  hover/empty states, no skeleton pages, no placeholder text, no lorem ipsum.
+  If the result would look like an unstyled demo, it is not done.
 - Explore with list_files / read_file before editing existing code.
 - Build everything the task needs — create each file (HTML, CSS, JS, package.json, etc.) with its own write_file turn.
 - The write_file body is saved exactly as written: do NOT escape it, wrap it in markdown code fences, or add commentary inside it.
@@ -275,10 +281,12 @@ export async function runAgent(
 		// `finish` is reported via onFinish; don't also emit a stuck "running" card.
 		if (action.tool !== 'finish') {cb.onAction(action.tool, action.args);}
 		// Echo the action into the transcript — but never re-embed full file bodies
-		// (that would blow the context window on multi-file builds).
+		// (that would blow the context window on multi-file builds). The echo is
+		// SELF-CLOSING with no body: any placeholder text here gets imitated by
+		// models as literal file content ("…" produced 3-byte files).
 		const echo =
 			action.tool === 'write_file'
-				? `<tool name="write_file" path="${String(action.args.path ?? '')}">…</tool>`
+				? `<tool name="write_file" path="${String(action.args.path ?? '')}"/>`
 				: action.tool === 'run_command'
 					? `<tool name="run_command">${String(action.args.cmd ?? '')}</tool>`
 					: `<tool name="${action.tool}"${action.args.path ? ` path="${String(action.args.path)}"` : ''}${action.args.query ? ` query="${String(action.args.query)}"` : ''
@@ -332,6 +340,14 @@ export async function runAgent(
 						break;
 					}
 					const content = String(action.args.content ?? '');
+					// Placeholder-content guard: reject ellipsis/stub bodies outright
+					// (models sometimes echo transcript placeholders as file content).
+					// allow-any-unicode-next-line
+					if (/^[\s.…]*$/.test(content) || /^(\/\/\s*)?(TODO|\.\.\.|\[\.\.\.\]|\[omitted\])\s*$/i.test(content.trim()) || /\[(full |file )?contents?( were| was)? (provided|saved|omitted)/i.test(content)) {
+						observation = `STOP — that write for ${p} contained placeholder content, not the real file. Provide the COMPLETE file contents in the tool body.`;
+						toolFailed = true;
+						break;
+					}
 					if (lastContent.get(p) === content) {
 						observation = `STOP — you already wrote ${p} with exactly this content. It is saved. Move on to the next step or call finish.`;
 						toolFailed = true;
