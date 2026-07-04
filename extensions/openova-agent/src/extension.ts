@@ -464,7 +464,7 @@ class OpenovaChatViewProvider implements vscode.WebviewViewProvider {
 			enableScripts: true,
 			localResourceRoots: [vscode.Uri.joinPath(this.context.extensionUri, 'media')]
 		};
-		panel.iconPath = vscode.Uri.joinPath(this.context.extensionUri, 'media', 'nova.svg');
+		panel.iconPath = vscode.Uri.joinPath(this.context.extensionUri, 'media', 'nova-color.svg');
 		panel.webview.html = this.html(panel.webview, 'window');
 		panel.webview.onDidReceiveMessage((msg: Record<string, unknown>) => {
 			void this.onMessage(msg);
@@ -1291,7 +1291,7 @@ class OpenovaChatViewProvider implements vscode.WebviewViewProvider {
 		const nonce = uid() + uid();
 		const css = webview.asWebviewUri(vscode.Uri.joinPath(this.context.extensionUri, 'media', 'main.css'));
 		const js = webview.asWebviewUri(vscode.Uri.joinPath(this.context.extensionUri, 'media', 'main.js'));
-		const icon = webview.asWebviewUri(vscode.Uri.joinPath(this.context.extensionUri, 'media', 'nova.svg'));
+		const icon = webview.asWebviewUri(vscode.Uri.joinPath(this.context.extensionUri, 'media', 'nova-color.svg'));
 		return /* html */ `<!DOCTYPE html>
 <html lang="en">
 <head>

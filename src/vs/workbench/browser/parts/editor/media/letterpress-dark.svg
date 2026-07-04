@@ -1,6 +1,4 @@
 <svg width="260" height="260" viewBox="0 0 200 200" opacity="0.1" xmlns="http://www.w3.org/2000/svg">
-<path d="M100 15 C106 55 121 70 161 76 C121 82 106 97 100 137 C94 97 79 82 39 76 C79 70 94 55 100 15 Z" fill="#FFFFFF"/>
-<path d="M52 130 A62 62 0 0 0 145 53" fill="none" stroke="#FFFFFF" stroke-opacity="0.55" stroke-width="7" stroke-linecap="round"/>
-<circle cx="147" cy="48" r="9" fill="#FFFFFF"/>
-<path d="M100 148 C103 166 111 174 129 177 C111 180 103 188 100 200 C97 188 89 180 71 177 C89 174 97 166 100 148 Z" fill="#FFFFFF" fill-opacity="0.6"/>
+<path d="M 145.7 94.4 A 46 46 0 1 1 105.6 54.3" fill="none" stroke="#FFFFFF" stroke-width="22" stroke-linecap="round"/>
+<path d="M 132.5 37.5 Q 138.5 61.5 162.5 67.5 Q 138.5 73.5 132.5 97.5 Q 126.5 73.5 102.5 67.5 Q 126.5 61.5 132.5 37.5 Z" fill="#FFFFFF"/>
 </svg>
