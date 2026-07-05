@@ -29,6 +29,8 @@ interface UiStep {
 	title: string;
 	status: 'running' | 'done' | 'error';
 	detail?: string;
+	/** Wall-clock time the step took, ms (for the mono duration column). */
+	ms?: number;
 }
 
 /** One file a run touched — a row in the post-run review bar. */
@@ -1525,6 +1527,7 @@ class OpenovaChatViewProvider implements vscode.WebviewViewProvider {
 			this.post({ type: 'stepUpdate', sessionId, msgId: agentMsg.id, id, patch });
 		};
 		let currentToolId: string | null = null;
+		let currentToolStart = Date.now();
 		let devContinues = 0;
 		let autoExtends = 0;
 
@@ -1703,6 +1706,7 @@ class OpenovaChatViewProvider implements vscode.WebviewViewProvider {
 					onThought: (t) => addStep({ id: uid(), kind: 'thought', title: t, status: 'done' }),
 					onAction: (name, args) => {
 						currentToolId = uid();
+						currentToolStart = Date.now();
 						addStep({ id: currentToolId, kind: name, title: title(name, args), status: 'running' });
 						this.post({ type: 'activity', sessionId, msgId: agentMsg.id, status: title(name, args), chars: 0 });
 					},
@@ -1710,7 +1714,8 @@ class OpenovaChatViewProvider implements vscode.WebviewViewProvider {
 						if (currentToolId) {
 							patchStep(currentToolId, {
 								status: isError ? 'error' : 'done',
-								detail: obs.slice(0, 2000)
+								detail: obs.slice(0, 2000),
+								ms: Date.now() - currentToolStart
 							});
 							currentToolId = null;
 						}

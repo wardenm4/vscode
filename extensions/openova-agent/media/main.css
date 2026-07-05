@@ -25,10 +25,29 @@ select option {
 	background: var(--vscode-dropdown-background, #1e1e27);
 	color: var(--vscode-dropdown-foreground, var(--vscode-foreground));
 }
+/* BridgeAgent-style design tokens (theme-aware) */
+:root {
+	--ov-hair: color-mix(in srgb, var(--vscode-foreground) 11%, transparent);
+	--ov-card: color-mix(in srgb, var(--vscode-foreground) 3%, transparent);
+	--ov-success: var(--vscode-charts-green, #3ecf8e);
+	--ov-warn: var(--vscode-charts-orange, #e0a458);
+	--ov-mono: var(--vscode-editor-font-family);
+}
 #app {
 	display: flex;
 	flex-direction: column;
 	height: 100vh;
+}
+
+/* mono right-aligned duration column on tool rows */
+.row-time {
+	margin-left: auto;
+	font-family: var(--ov-mono);
+	font-size: 10.5px;
+	color: var(--vscode-descriptionForeground);
+	opacity: 0.7;
+	flex-shrink: 0;
+	padding-left: 8px;
 }
 
 /* header */
@@ -967,65 +986,104 @@ select option {
 
 /* plan card */
 .plan {
-	margin-top: 6px;
-	border: 1px solid var(--vscode-panel-border);
-	border-radius: 6px;
+	margin-top: 8px;
+	border: 1px solid var(--ov-hair);
+	border-radius: 12px;
 	overflow: hidden;
+	background: var(--ov-card);
 }
 .plan.running {
-	border-color: var(--vscode-focusBorder);
+	border-color: color-mix(in srgb, var(--vscode-focusBorder) 45%, transparent);
 }
 .plan .phead {
 	display: flex;
 	align-items: center;
-	gap: 8px;
-	padding: 6px 9px;
-	border-bottom: 1px solid var(--vscode-panel-border);
+	gap: 10px;
+	padding: 12px 14px 8px;
 }
-.plan .ptitle {
+.plan .ptitle-wrap {
+	display: flex;
+	align-items: center;
+	gap: 8px;
 	flex: 1;
 	min-width: 0;
+}
+.plan .ptitle-wrap svg {
+	color: var(--vscode-descriptionForeground);
+	flex-shrink: 0;
+}
+.plan .ptitle {
+	min-width: 0;
 	font-weight: 600;
-	font-size: 12.5px;
+	font-size: 13.5px;
 	overflow: hidden;
 	text-overflow: ellipsis;
 	white-space: nowrap;
 }
+.plan .pmeta {
+	display: flex;
+	align-items: center;
+	gap: 8px;
+	flex-shrink: 0;
+}
+.plan .pcount {
+	font-family: var(--vscode-editor-font-family);
+	font-size: 11px;
+	color: var(--vscode-descriptionForeground);
+}
 .plan .pbadge {
-	font-size: 10px;
-	text-transform: uppercase;
-	letter-spacing: 0.4px;
-	border-radius: 8px;
-	padding: 1px 7px;
-	border: 1px solid var(--vscode-input-border, #555);
+	font-size: 10.5px;
+	border-radius: 20px;
+	padding: 2px 9px;
+	border: 1px solid var(--ov-hair);
 	color: var(--vscode-descriptionForeground);
 	flex-shrink: 0;
 }
+.plan .pbadge.proposed {
+	border-color: color-mix(in srgb, var(--ov-warn) 55%, transparent);
+	color: var(--ov-warn);
+}
 .plan .pbadge.running {
-	border-color: var(--vscode-focusBorder);
+	border-color: color-mix(in srgb, var(--vscode-focusBorder) 55%, transparent);
 	color: var(--vscode-focusBorder);
 }
 .plan .pbadge.done {
-	border-color: var(--vscode-charts-green, #89d185);
-	color: var(--vscode-charts-green, #89d185);
+	border-color: color-mix(in srgb, var(--ov-success) 55%, transparent);
+	color: var(--ov-success);
+}
+.plan .ptrack {
+	height: 3px;
+	margin: 0 14px;
+	border-radius: 3px;
+	background: var(--ov-hair);
+	overflow: hidden;
+}
+.plan .pfill {
+	height: 100%;
+	border-radius: 3px;
+	background: var(--vscode-focusBorder);
+	transition: width 0.3s ease;
+}
+.plan .pfill.full {
+	background: var(--ov-success);
 }
 .plan .psteps {
-	padding: 5px;
+	padding: 10px 14px 12px;
 	display: flex;
 	flex-direction: column;
-	gap: 3px;
+	gap: 7px;
 }
 .plan .pstep {
 	display: flex;
 	align-items: center;
-	gap: 7px;
-	font-size: 12px;
+	gap: 9px;
+	font-size: 12.5px;
 }
 .plan .pmark {
-	width: 17px;
-	height: 17px;
+	width: 18px;
+	height: 18px;
 	border-radius: 50%;
-	border: 1px solid var(--vscode-input-border, #555);
+	border: 1px solid var(--ov-hair);
 	display: inline-flex;
 	align-items: center;
 	justify-content: center;
@@ -1033,9 +1091,13 @@ select option {
 	color: var(--vscode-descriptionForeground);
 	flex-shrink: 0;
 }
+.plan .pmark.done {
+	border-color: transparent;
+	background: color-mix(in srgb, var(--ov-success) 18%, transparent);
+	color: var(--ov-success);
+}
 .plan .pstep.done .pmark {
-	border-color: var(--vscode-charts-green, #89d185);
-	color: var(--vscode-charts-green, #89d185);
+	color: var(--ov-success);
 }
 .plan .pstep input {
 	flex: 1;
@@ -2042,4 +2104,149 @@ body[data-mode='window'] .win-main > .composer textarea {
 }
 .qchip .x:hover {
 	opacity: 1;
+}
+
+/* BridgeAgent visual language — pure-black, hairline cards, mono labels,
+	small-caps section headers, ghost/filled buttons; layered last to refine. */
+
+/* user turn: subtle tinted bubble */
+.msg.user .body {
+	background: color-mix(in srgb, var(--vscode-focusBorder) 9%, transparent);
+	border: 1px solid color-mix(in srgb, var(--vscode-focusBorder) 20%, transparent);
+	border-radius: 12px;
+	padding: 10px 13px;
+}
+
+/* section headers → small-caps, letter-spaced, muted */
+.rail-head,
+.grid-head,
+.autom-form-head,
+.q-head,
+.rm-head {
+	text-transform: uppercase;
+	letter-spacing: 1.2px;
+	font-size: 10px;
+	font-weight: 600;
+	color: color-mix(in srgb, var(--vscode-descriptionForeground) 80%, transparent);
+}
+
+/* "Worked for" / "Explored" disclosure lines — quieter */
+.work-head,
+.explore-head {
+	font-size: 11.5px;
+	color: color-mix(in srgb, var(--vscode-descriptionForeground) 85%, transparent);
+}
+
+/* hairline-bordered cards + rounder radii */
+.review,
+.qcard,
+.pausedbar,
+.autom-row,
+.autom-form,
+.theme-card,
+.cmd-head,
+.home-composer {
+	border-color: var(--ov-hair) !important;
+	border-radius: 12px;
+}
+.cmd-head {
+	background: var(--ov-card);
+	border-radius: 10px;
+}
+.cmd-out {
+	background: #00000055;
+	border-color: var(--ov-hair);
+}
+.cmd-label {
+	font-family: var(--ov-mono);
+	text-transform: uppercase;
+	letter-spacing: 0.6px;
+	font-size: 9.5px;
+	opacity: 0.75;
+}
+
+/* status pills everywhere → thin rounded outline */
+.pbadge,
+.q-head,
+.rnew {
+	border-radius: 20px;
+}
+
+/* filled primary buttons */
+.bar .send,
+.plan .papprove,
+.review .rkeep,
+.pb-continue,
+.autom-save,
+.q-opt:hover,
+.mod-addkey {
+	border-radius: 8px;
+}
+
+/* ghost / secondary buttons → hairline outline, no fill */
+.plan .pcancel,
+.plan .padd,
+.review .rundo,
+.review .rrevert,
+.pb-stop,
+.autom-run,
+.tool-mini,
+.q-skip {
+	border: 1px solid var(--ov-hair) !important;
+	background: transparent !important;
+	border-radius: 8px;
+}
+
+/* composer: bigger radius, hairline, roomier */
+.composer textarea {
+	border-radius: 10px;
+	border-color: var(--ov-hair);
+}
+.home-composer {
+	border-radius: 16px;
+	padding: 14px 14px 10px;
+}
+
+/* suggestion chips → thin pills */
+.sugg-chip {
+	border-radius: 20px;
+	border-color: var(--ov-hair);
+	background: transparent;
+	padding: 6px 14px;
+}
+.sugg-chip .kbd {
+	font-family: var(--ov-mono);
+	font-size: 10px;
+	opacity: 0.7;
+}
+
+/* rail: active item accent bar, quieter idle */
+.rail-item.active {
+	background: color-mix(in srgb, var(--vscode-foreground) 6%, transparent);
+	box-shadow: inset 2px 0 0 var(--vscode-focusBorder);
+}
+.rail-sess.active {
+	box-shadow: inset 2px 0 0 var(--vscode-focusBorder);
+}
+
+/* repo menu → hairline, rounder */
+.repo-menu {
+	border-color: var(--ov-hair);
+	border-radius: 12px;
+}
+.rm-path {
+	font-family: var(--ov-mono);
+}
+
+/* the blue Agents-window pill/link tone in mono meta */
+.pcount,
+.sess-age,
+.rs-age,
+.meta-age {
+	font-family: var(--ov-mono);
+}
+
+/* diff counts + timings share the mono, teal/red tone */
+.radd {
+	color: var(--ov-success);
 }

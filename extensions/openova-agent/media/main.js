@@ -102,7 +102,9 @@
 		display: 'M1.5 3h13a.5.5 0 01.5.5V11a.5.5 0 01-.5.5H9v1h2V14H5v-1.5h2v-1H1.5A.5.5 0 011 11V3.5a.5.5 0 01.5-.5zm1 1.5V10h11V4.5h-11z',
 		doc: 'M4 1h5.5L13 4.5V15H4V1zm1.5 1.5v11h6V5.5H8.5V2.5h-3zM10 2.9V4h1.1L10 2.9zM6 7h5v1.2H6V7zm0 2.5h5v1.2H6V9.5z',
 		globe: 'M8 1a7 7 0 110 14A7 7 0 018 1zm-.75 1.66A5.5 5.5 0 002.52 7.25h2.6c.1-1.7.5-3.28 1.13-4.59zM8 2.62c-.63 1.13-1.13 2.72-1.25 4.63h2.5C9.13 5.34 8.63 3.75 8 2.62zm2.88 4.63h2.6a5.5 5.5 0 00-4.73-4.59c.64 1.31 1.03 2.9 1.13 4.59zm-.01 1.5c-.1 1.7-.49 3.28-1.12 4.59a5.5 5.5 0 004.73-4.59h-2.61zM8 13.38c.63-1.13 1.13-2.72 1.25-4.63h-2.5c.12 1.91.62 3.5 1.25 4.63zm-2.88-4.63h-2.6a5.5 5.5 0 004.73 4.59c-.63-1.31-1.03-2.9-1.13-4.59z',
-		term: 'M2 3h12a1 1 0 011 1v8a1 1 0 01-1 1H2a1 1 0 01-1-1V4a1 1 0 011-1zm.5 1.5v7h11v-7h-11zM4 6l2.2 1.9L4 9.8l.9 1L8 7.9 4.9 5.1 4 6zm4.5 4h3.5v1.2H8.5V10z'
+		term: 'M2 3h12a1 1 0 011 1v8a1 1 0 01-1 1H2a1 1 0 01-1-1V4a1 1 0 011-1zm.5 1.5v7h11v-7h-11zM4 6l2.2 1.9L4 9.8l.9 1L8 7.9 4.9 5.1 4 6zm4.5 4h3.5v1.2H8.5V10z',
+		tasks: 'M1 2.5l1.4 1.4L5 1.3l.9.9L2.4 5.8 0 3.4 1 2.5zM7 3h9v1.5H7V3zM1 8.5l1.4 1.4L5 7.3l.9.9-3.5 3.6L0 9.4 1 8.5zM7 9h9v1.5H7V9zm-6 4.2h2v2H1v-2zm6 .3h9V15H7v-1.5z',
+		check: 'M6.2 11.3L2.5 7.6l1.1-1.1 2.6 2.6 5.6-5.6 1.1 1.1z'
 	};
 
 	// ---- lightweight markdown → DOM (no innerHTML with model text) ----
@@ -852,6 +854,7 @@
 
 	// Bundled theme palettes for the preview cards (mirrors openova-themes).
 	const THEMES = [
+		{ name: 'Openova Void', tb: '#000000', sb: '#000000', ed: '#000000', btn: '#3b82f6', fg: '#e8eaed', line: '#1c1e23' },
 		{ name: 'Openova Dark', tb: '#17171d', sb: '#1b1b22', ed: '#141419', btn: '#7c6cf0', fg: '#e8e8ee', line: '#2c2c38' },
 		{ name: 'Openova Midnight', tb: '#0b0e1a', sb: '#0e1220', ed: '#090c16', btn: '#2f6fe0', fg: '#dfe4f2', line: '#1d2438' },
 		{ name: 'Openova Light', tb: '#f4f3f8', sb: '#f8f7fb', ed: '#ffffff', btn: '#6a5ae0', fg: '#2a2a33', line: '#e2e0ec' },
@@ -1231,21 +1234,37 @@
 		const p = m.plan;
 		const card = el('div', 'plan ' + p.status);
 		const head = el('div', 'phead');
-		head.appendChild(el('span', 'ptitle', p.title));
+		const titleWrap = el('div', 'ptitle-wrap');
+		titleWrap.appendChild(icon(ICONS.tasks, 13));
+		titleWrap.appendChild(el('span', 'ptitle', p.title));
+		head.appendChild(titleWrap);
 		const done = p.steps.filter((s) => s.done).length;
+		const total = p.steps.length;
 		const badge =
 			p.status === 'proposed' ? 'Awaiting approval'
-				: p.status === 'running' ? 'Running ' + done + '/' + p.steps.length
+				: p.status === 'running' ? 'Running'
 					: p.status === 'done' ? 'Completed' : 'Cancelled';
-		head.appendChild(el('span', 'pbadge ' + p.status, badge));
+		const rightMeta = el('div', 'pmeta');
+		rightMeta.appendChild(el('span', 'pcount', done + '/' + total));
+		rightMeta.appendChild(el('span', 'pbadge ' + p.status, badge));
+		head.appendChild(rightMeta);
 		card.appendChild(head);
+		// thin progress bar (BridgeAgent "Tasks N/N")
+		const track = el('div', 'ptrack');
+		const fill = el('div', 'pfill' + (p.status === 'done' ? ' full' : ''));
+		fill.style.width = (total ? Math.round((done / total) * 100) : 0) + '%';
+		track.appendChild(fill);
+		card.appendChild(track);
 		const steps = el('div', 'psteps');
 		const editable = p.status === 'proposed';
 		p.steps.forEach((s, i) => {
 			const row = el('div', 'pstep' + (s.done ? ' done' : ''));
-			const mark = el('span', 'pmark');
-			// allow-any-unicode-next-line
-			mark.textContent = s.done ? '✓' : String(i + 1);
+			const mark = el('span', 'pmark' + (s.done ? ' done' : ''));
+			if (s.done) {
+				mark.appendChild(icon(ICONS.check, 10));
+			} else {
+				mark.textContent = String(i + 1);
+			}
 			row.appendChild(mark);
 			if (editable) {
 				const input = document.createElement('input');
@@ -1337,6 +1356,15 @@
 		const s = Math.round(ms / 1000);
 		if (s < 60) { return s + 's'; }
 		return Math.floor(s / 60) + 'm ' + (s % 60) + 's';
+	}
+
+	// Compact per-step duration for the mono right column (0.2s / 12s / 1m3s).
+	function fmtMs(ms) {
+		if (typeof ms !== 'number') { return ''; }
+		if (ms < 950) { return (ms / 1000).toFixed(1) + 's'; }
+		const s = ms / 1000;
+		if (s < 60) { return (s < 10 ? s.toFixed(1) : Math.round(s)) + 's'; }
+		return Math.floor(s / 60) + 'm' + Math.round(s % 60) + 's';
 	}
 
 	function dedupSteps(steps) {
@@ -1451,6 +1479,7 @@
 			head.appendChild(el('span', 'cmd-label', st.kind === 'check' ? 'Checked' : 'Ran'));
 			head.appendChild(el('code', 'cmd-text', st.title.replace(/^\$\s*/, '')));
 			if (st.status === 'running') { head.appendChild(el('span', 'spin')); }
+			else if (typeof st.ms === 'number') { head.appendChild(el('span', 'row-time', fmtMs(st.ms))); }
 			if (st.detail) {
 				const chev = el('span', 'work-chev' + (open ? ' open' : ''));
 				chev.appendChild(icon(ICONS.chevron, 10));
@@ -1492,6 +1521,9 @@
 		if (count > 1) {
 			// allow-any-unicode-next-line
 			line.appendChild(el('span', 'xn', '×' + count));
+		}
+		if (st.status !== 'running' && typeof st.ms === 'number' && st.kind !== 'finish') {
+			line.appendChild(el('span', 'row-time', fmtMs(st.ms)));
 		}
 		if (st.kind === 'write_file') {
 			// edited-file rows open the file in the Editor pane

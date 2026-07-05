@@ -14,6 +14,11 @@
   "contributes": {
     "themes": [
       {
+        "label": "Openova Void",
+        "uiTheme": "vs-dark",
+        "path": "./themes/openova-void.json"
+      },
+      {
         "label": "Openova Dark",
         "uiTheme": "vs-dark",
         "path": "./themes/openova-dark.json"
