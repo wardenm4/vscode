@@ -706,14 +706,16 @@ class OpenovaChatViewProvider implements vscode.WebviewViewProvider {
 		this.post({ type: 'queue', sessionId, items: this.queues.get(sessionId) ?? [] });
 	}
 
-	private settings(): { provider: AIProvider; model: string; effort: string; baseUrl: string; permissionMode: string } {
+	private settings(): { provider: AIProvider; model: string; effort: string; baseUrl: string; permissionMode: string; sandbox: string; approval: string } {
 		const cfg = vscode.workspace.getConfiguration('openova');
 		return {
 			provider: cfg.get<string>('provider', 'ollama') as AIProvider,
 			model: cfg.get<string>('model', 'qwen3.5:9b'),
 			effort: cfg.get<string>('reasoningEffort', 'off'),
 			baseUrl: cfg.get<string>('baseUrl', ''),
-			permissionMode: cfg.get<string>('permissionMode', 'ask')
+			permissionMode: cfg.get<string>('permissionMode', 'ask'),
+			sandbox: cfg.get<string>('sandbox', 'workspace-write'),
+			approval: cfg.get<string>('approval', '') || (cfg.get<string>('permissionMode', 'ask') === 'auto' ? 'never' : 'untrusted')
 		};
 	}
 
@@ -1073,7 +1075,7 @@ class OpenovaChatViewProvider implements vscode.WebviewViewProvider {
 				const cfg = vscode.workspace.getConfiguration('openova');
 				const patch = (msg.patch ?? {}) as Record<string, string>;
 				for (const [key, val] of Object.entries(patch)) {
-					if (['provider', 'model', 'reasoningEffort', 'baseUrl', 'permissionMode'].includes(key)) {
+					if (['provider', 'model', 'reasoningEffort', 'baseUrl', 'permissionMode', 'sandbox', 'approval', 'networkAccess'].includes(key)) {
 						await cfg.update(key, val, vscode.ConfigurationTarget.Global);
 					}
 				}

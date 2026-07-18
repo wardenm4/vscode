@@ -1219,16 +1219,32 @@
 		}
 		eff.appendChild(seg);
 		panel.appendChild(eff);
+		const sand = el('div', 'effort');
+		sand.appendChild(el('span', 'pane-head', 'Sandbox'));
+		const sseg = el('div', 'seg');
+		for (const [v, label, tip] of [
+			['read-only', 'Read-only', 'No file writes; every command asks first'],
+			['workspace-write', 'Workspace', 'Writes stay inside the workspace; .git protected'],
+			['full-access', 'Full', 'No write restrictions']
+		]) {
+			const b = el('button', (settings.sandbox || 'workspace-write') === v ? 'active' : '', label);
+			b.title = tip;
+			b.onclick = () => vscode.postMessage({ type: 'setSettings', patch: { sandbox: v } });
+			sseg.appendChild(b);
+		}
+		sand.appendChild(sseg);
+		panel.appendChild(sand);
 		const perm = el('div', 'effort');
-		perm.appendChild(el('span', 'pane-head', 'Commands'));
+		perm.appendChild(el('span', 'pane-head', 'Approval'));
 		const pseg = el('div', 'seg');
-		for (const [v, label] of [['ask', 'Ask first'], ['auto', 'Auto-run']]) {
-			const b = el('button', (settings.permissionMode || 'ask') === v ? 'active' : '', label);
-			b.title =
-				v === 'auto'
-					? 'Bypass permission prompts — the agent runs terminal commands without asking'
-					: 'Ask before running commands the safety gate doesn\'t auto-allow';
-			b.onclick = () => vscode.postMessage({ type: 'setSettings', patch: { permissionMode: v } });
+		for (const [v, label, tip] of [
+			['untrusted', 'Cautious', 'Ask for any command that is not known-safe'],
+			['on-request', 'Standard', 'Work freely in the sandbox; ask only for destructive or network commands'],
+			['never', 'Auto', 'Never ask — including destructive commands']
+		]) {
+			const b = el('button', (settings.approval || 'untrusted') === v ? 'active' : '', label);
+			b.title = tip;
+			b.onclick = () => vscode.postMessage({ type: 'setSettings', patch: { approval: v } });
 			pseg.appendChild(b);
 		}
 		perm.appendChild(pseg);

@@ -34,6 +34,40 @@ function resolveInRoot(root: string, rel: string): string {
 	return full;
 }
 
+// ---- security axes (Codex-style: sandbox x approval, independent) ----------
+// sandbox:  read-only | workspace-write | full-access — what the agent MAY do.
+// approval: untrusted | on-request | never — when the user is ASKED.
+// Enforcement is application-layer on Windows (no kernel sandbox available);
+// the settings descriptions say so honestly.
+
+export interface SecurityConfig {
+	sandbox: 'read-only' | 'workspace-write' | 'full-access';
+	approval: 'untrusted' | 'on-request' | 'never';
+	network: boolean;
+}
+
+export function securityConfig(): SecurityConfig {
+	const cfg = vscode.workspace.getConfiguration('openova');
+	const sandbox = cfg.get<string>('sandbox', 'workspace-write') as SecurityConfig['sandbox'];
+	let approval = cfg.get<string>('approval', '') as SecurityConfig['approval'] | '';
+	if (!approval) {
+		// Legacy mapping: permissionMode auto → never, ask → untrusted.
+		approval = cfg.get<string>('permissionMode', 'ask') === 'auto' ? 'never' : 'untrusted';
+	}
+	return { sandbox, approval, network: cfg.get<boolean>('networkAccess', false) };
+}
+
+/** Paths the agent must never write, whatever the sandbox mode. */
+function isProtectedWrite(rel: string): boolean {
+	const norm = rel.replace(/\\/g, '/').replace(/^\.\//, '');
+	return /^(\.git|\.openova)(\/|$)/i.test(norm);
+}
+
+/** Commands that reach the network (approval-gated when network access is off). */
+function isNetworkCommand(cmd: string): boolean {
+	return /(^|[\s;&|])(curl|wget|iwr|invoke-webrequest|invoke-restmethod|ping|ssh|scp|sftp|telnet|nc|ncat)\b/i.test(cmd);
+}
+
 async function runShell(
 	cmd: string,
 	cwd: string,
@@ -78,19 +112,23 @@ async function runShell(
 }
 
 /** Ask the user to approve a command the gate didn't auto-allow. */
-async function approveCommand(host: ToolHost, cmd: string, dangerous: boolean): Promise<boolean> {
+async function approveCommand(
+	host: ToolHost,
+	cmd: string,
+	reason: 'destructive' | 'network' | 'command'
+): Promise<boolean> {
 	// Headless harness runs can't answer a modal — deny deterministically so
 	// verification never hangs (the model is told the user declined). Scoped
 	// to the harness's own run: user turns in the same instance prompt normally.
 	if (isDevRunActive()) { return false; }
-	// Auto / bypass-permissions mode: the user opted in to running commands
-	// without per-command prompts (Cursor's "auto-run" equivalent).
-	if (vscode.workspace.getConfiguration('openova').get<string>('permissionMode', 'ask') === 'auto') {
-		return true;
-	}
+	const dangerous = reason === 'destructive';
 	if (!dangerous && host.sessionAllowed.has('*')) { return true; }
+	const label =
+		reason === 'destructive' ? ' a potentially destructive command'
+			: reason === 'network' ? ' a command that reaches the network'
+				: ' a command';
 	const pick = await vscode.window.showWarningMessage(
-		`Openova agent wants to run${dangerous ? ' a potentially destructive command' : ''}:`,
+		`Openova agent wants to run${label}:`,
 		{ modal: true, detail: cmd },
 		'Run',
 		...(dangerous ? [] : ['Always allow this session'])
@@ -155,6 +193,13 @@ export function createTools(host: ToolHost): AgentTools {
 		},
 
 		writeFile: async (rel, content) => {
+			const sec = securityConfig();
+			if (sec.sandbox === 'read-only') {
+				throw new Error('The sandbox is read-only — file writes are disabled (openova.sandbox).');
+			}
+			if (isProtectedWrite(rel)) {
+				throw new Error(`Writes to ${rel} are blocked (.git and .openova are protected).`);
+			}
 			const full = resolveInRoot(host.root, rel);
 			const uri = vscode.Uri.file(full);
 			let existed = true;
@@ -178,10 +223,26 @@ export function createTools(host: ToolHost): AgentTools {
 		},
 
 		runCommand: async (cmd, background) => {
+			const sec = securityConfig();
 			const verdict = classifyCommand(cmd, !!background);
-			if (verdict.dangerous || !verdict.autoSafe) {
-				const ok = await approveCommand(host, cmd, verdict.dangerous);
-				if (!ok) { return { output: '', exitCode: null, denied: true }; }
+			const net = !sec.network && isNetworkCommand(cmd);
+			// Decision matrix: the sandbox axis decides what MAY run; the
+			// approval axis decides when to ASK for the rest.
+			let prompt: 'destructive' | 'network' | 'command' | null = null;
+			if (sec.sandbox === 'read-only') {
+				prompt = verdict.dangerous ? 'destructive' : 'command';
+			} else if (verdict.dangerous) {
+				prompt = sec.approval === 'never' ? null : 'destructive';
+			} else if (net) {
+				prompt = sec.approval === 'never' ? null : 'network';
+			} else if (!verdict.autoSafe) {
+				// untrusted asks for everything non-trivial; on-request lets the
+				// agent work inside the sandbox and only asks for escalations.
+				prompt = sec.approval === 'untrusted' ? 'command' : null;
+			}
+			if (prompt) {
+				const ok = await approveCommand(host, cmd, prompt);
+				if (!ok) { return { output: `(declined: ${prompt} approval)`, exitCode: null, denied: true }; }
 			}
 			if (background) {
 				const term = vscode.window.createTerminal({ name: 'Openova agent', cwd: host.root });

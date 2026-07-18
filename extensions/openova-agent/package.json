@@ -108,18 +108,50 @@
           "default": "ollama",
           "description": "AI provider for chat and agent runs."
         },
+        "openova.sandbox": {
+          "type": "string",
+          "enum": [
+            "read-only",
+            "workspace-write",
+            "full-access"
+          ],
+          "enumDescriptions": [
+            "The agent may not write files; every command asks first.",
+            "The agent writes only inside the workspace (.git and .openova stay protected).",
+            "No write restrictions (commands still follow the approval policy)."
+          ],
+          "default": "workspace-write",
+          "description": "What the agent MAY do. Enforced at the application layer (no OS kernel sandbox on Windows)."
+        },
+        "openova.approval": {
+          "type": "string",
+          "enum": [
+            "untrusted",
+            "on-request",
+            "never"
+          ],
+          "enumDescriptions": [
+            "Ask for any command that is not known-safe.",
+            "Let the agent work inside the sandbox; ask only for destructive or network escalations.",
+            "Never ask (destructive commands included — use with care)."
+          ],
+          "default": "untrusted",
+          "description": "When the agent asks before running commands. Independent from the sandbox axis."
+        },
+        "openova.networkAccess": {
+          "type": "boolean",
+          "default": false,
+          "description": "Allow network-reaching commands (curl, ssh, ping...) without approval. Off = they require approval."
+        },
         "openova.permissionMode": {
           "type": "string",
           "enum": [
             "ask",
             "auto"
           ],
-          "enumDescriptions": [
-            "Ask before running commands the safety gate doesn't auto-allow.",
-            "Bypass permission prompts — the agent runs commands without asking (use with care)."
-          ],
           "default": "ask",
-          "description": "How agent-run terminal commands are approved."
+          "markdownDeprecationMessage": "Superseded by `openova.sandbox` and `openova.approval` (auto maps to approval: never).",
+          "description": "Deprecated: use openova.sandbox + openova.approval."
         },
         "openova.model": {
           "type": "string",

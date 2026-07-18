@@ -411,7 +411,7 @@ export async function runAgent(
 					const bg = String(action.args.background ?? '').toLowerCase() === 'true';
 					const r = await tools.runCommand(cmd, bg);
 					if (r.denied) {
-						observation = 'The user declined to run this command. Try another approach.';
+						observation = `The command was not approved${r.output ? ` ${r.output}` : ''}. Try another approach.`;
 						toolFailed = true;
 						break;
 					}
