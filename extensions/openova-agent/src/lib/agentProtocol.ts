@@ -29,6 +29,9 @@ export const TOOL_NAMES = [
 	'propose_plan',
 	'remember',
 	'use_skill',
+	'await',
+	'browser_open',
+	'browser_snapshot',
 	'finish'
 ];
 
@@ -97,7 +100,18 @@ function buildAction(tool: string, attrs: string, body: string): Action {
 			.map((l) => l.replace(/^\s*(?:\d+[.)]\s*|[-*]\s*)/, '').trim())
 			.filter(Boolean)
 			.slice(0, 12);
-	} else if (tool === 'remember') {args.fact = inner;}
+	} else if (tool === 'await') {
+		const job = readAttr(attrs, 'job');
+		const pattern = readAttr(attrs, 'pattern');
+		const seconds = readAttr(attrs, 'seconds');
+		const timeout = readAttr(attrs, 'timeout');
+		if (job !== undefined) {args.job = job;}
+		if (pattern !== undefined) {args.pattern = pattern;}
+		if (seconds !== undefined) {args.seconds = seconds;}
+		if (timeout !== undefined) {args.timeout = timeout;}
+	} else if (tool === 'browser_open' || tool === 'browser_snapshot')
+		{args.url = readAttr(attrs, 'url') ?? inner;}
+	else if (tool === 'remember') {args.fact = inner;}
 	// NOTE: the tag's own name attr is taken — the skill goes in `skill` or body.
 	else if (tool === 'use_skill') {args.name = readAttr(attrs, 'skill') ?? inner;}
 	else if (tool === 'finish') {args.summary = summary ?? (inner || 'Done.');}

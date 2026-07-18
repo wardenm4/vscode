@@ -180,8 +180,8 @@ export interface Settings {
 	reasoningEffort: ReasoningEffort;
 	/** Check command the agent must pass before finishing (e.g. "npx tsc --noEmit"); empty disables. */
 	agentCheckCommand: string;
-	/** MCP servers (stdio) whose tools are offered to the agent. */
-	mcpServers: { name: string; command: string }[];
+	/** MCP servers (stdio command, or remote Streamable HTTP url) whose tools are offered to the agent. */
+	mcpServers: { name: string; command?: string; url?: string; headers?: Record<string, string> }[];
 	/** Hook run after every agent file write ({file} = written path); empty disables. */
 	hookAfterWrite: string;
 	/** Hook run when an agent run completes; empty disables. */

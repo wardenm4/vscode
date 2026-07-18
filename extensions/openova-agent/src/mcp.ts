@@ -176,37 +176,147 @@ class McpClient {
 	}
 }
 
-const clients = new Map<string, McpClient>();
+/**
+ * Streamable HTTP transport (the modern MCP remote transport): JSON-RPC over
+ * POST, with the session id carried in the Mcp-Session-Id header and
+ * responses arriving as plain JSON or a single-response SSE stream.
+ */
+class HttpMcpClient {
+	tools: { name: string; description?: string }[] = [];
+	ready = false;
+	private sessionId: string | undefined;
+	private nextId = 1;
+
+	constructor(
+		public name: string,
+		public url: string,
+		private readonly headers: Record<string, string> = {}
+	) { }
+
+	private async post(body: unknown, expectReply: boolean, timeoutMs = 30_000): Promise<unknown> {
+		const res = await fetch(this.url, {
+			method: 'POST',
+			headers: {
+				'content-type': 'application/json',
+				accept: 'application/json, text/event-stream',
+				...(this.sessionId ? { 'mcp-session-id': this.sessionId } : {}),
+				...this.headers
+			},
+			body: JSON.stringify(body),
+			signal: AbortSignal.timeout(timeoutMs)
+		});
+		const sid = res.headers.get('mcp-session-id');
+		if (sid) { this.sessionId = sid; }
+		if (!expectReply) { return undefined; }
+		if (!res.ok) { throw new Error(`MCP HTTP ${res.status}`); }
+		const ctype = res.headers.get('content-type') ?? '';
+		const text = await res.text();
+		if (ctype.includes('text/event-stream')) {
+			// Parse SSE: the reply is the last data: line carrying our id.
+			let result: unknown;
+			for (const line of text.split(/\r?\n/)) {
+				if (!line.startsWith('data:')) { continue; }
+				try {
+					const msg = JSON.parse(line.slice(5).trim()) as { id?: number; result?: unknown; error?: { message?: string } };
+					if (msg.id !== undefined) {
+						if (msg.error) { throw new Error(msg.error.message ?? 'MCP error'); }
+						result = msg.result;
+					}
+				} catch (e) {
+					if (e instanceof Error && e.message !== 'Unexpected end of JSON input') { throw e; }
+				}
+			}
+			return result;
+		}
+		if (!text.trim()) { return undefined; }
+		const msg = JSON.parse(text) as { result?: unknown; error?: { message?: string } };
+		if (msg.error) { throw new Error(msg.error.message ?? 'MCP error'); }
+		return msg.result;
+	}
+
+	request(method: string, params: unknown, timeoutMs = 30_000): Promise<unknown> {
+		return this.post({ jsonrpc: '2.0', id: this.nextId++, method, params }, true, timeoutMs);
+	}
+
+	async init(): Promise<void> {
+		await this.request('initialize', {
+			protocolVersion: '2025-06-18',
+			capabilities: {},
+			clientInfo: { name: 'openova', version: '1.0.0' }
+		});
+		await this.post({ jsonrpc: '2.0', method: 'notifications/initialized', params: {} }, false);
+		const res = (await this.request('tools/list', {})) as {
+			tools?: { name: string; description?: string }[];
+		};
+		this.tools = res?.tools ?? [];
+		this.ready = true;
+	}
+
+	async call(tool: string, args: Record<string, unknown>): Promise<{ ok: boolean; text: string }> {
+		const res = (await this.request('tools/call', { name: tool, arguments: args }, 60_000)) as {
+			content?: { type: string; text?: string }[];
+			isError?: boolean;
+		};
+		const text = (res?.content ?? [])
+			.map((c) => (c.type === 'text' ? (c.text ?? '') : `[${c.type} content]`))
+			.join('\n');
+		return { ok: !res?.isError, text: text || (res?.isError ? 'tool call failed' : '(no output)') };
+	}
+
+	dispose(): void {
+		this.ready = false;
+	}
+}
+
+export interface McpServerConfig {
+	name: string;
+	command?: string;
+	url?: string;
+	headers?: Record<string, string>;
+}
+
+type AnyClient = McpClient | HttpMcpClient;
+const clients = new Map<string, AnyClient>();
+const clientKeys = new Map<string, string>();
+
+function configKey(s: McpServerConfig): string {
+	return s.url ? `http:${s.url}` : `stdio:${s.command}`;
+}
 
 /** Connect configured-but-not-connected servers, drop removed/dead ones, and
  *  return the full flattened tool list. Safe to call repeatedly. */
-export async function ensureMcp(
-	servers: { name: string; command: string }[]
-): Promise<McpToolInfo[]> {
+export async function ensureMcp(servers: McpServerConfig[]): Promise<McpToolInfo[]> {
 	// Dedupe by name (first entry wins) and drop blank rows.
-	const byName = new Map<string, { name: string; command: string }>();
+	const byName = new Map<string, McpServerConfig>();
 	for (const s of servers) {
-		if (s.name?.trim() && s.command?.trim() && !byName.has(s.name)) { byName.set(s.name, s); }
+		if (s.name?.trim() && (s.command?.trim() || s.url?.trim()) && !byName.has(s.name)) {
+			byName.set(s.name, s);
+		}
 	}
-	// Drop removed servers, dead clients, and clients whose command changed.
+	// Drop removed servers, dead clients, and clients whose config changed.
 	for (const [name, client] of clients) {
 		const want = byName.get(name);
-		if (!want || !client.ready || client.command !== want.command) {
+		if (!want || !client.ready || clientKeys.get(name) !== configKey(want)) {
 			client.dispose();
 			clients.delete(name);
+			clientKeys.delete(name);
 		}
 	}
 	await Promise.all(
 		Array.from(byName.values())
 			.filter((s) => !clients.has(s.name))
 			.map(async (s) => {
-				const client = new McpClient(s.name, s.command);
+				const client: AnyClient = s.url
+					? new HttpMcpClient(s.name, s.url, s.headers ?? {})
+					: new McpClient(s.name, s.command!);
 				clients.set(s.name, client);
+				clientKeys.set(s.name, configKey(s));
 				try {
 					await client.init();
 				} catch {
 					client.dispose();
 					clients.delete(s.name);
+					clientKeys.delete(s.name);
 				}
 			})
 	);

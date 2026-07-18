@@ -16,11 +16,12 @@ import { providerInfo, PROVIDERS } from './lib/providers';
 import { lineDiff } from './lib/diff';
 import type { AIProvider } from './types';
 import { createTools, createCheck, ToolHost } from './tools';
-import { ensureMcp, callMcp, disposeMcp } from './mcp';
+import { ensureMcp, callMcp, disposeMcp, type McpServerConfig } from './mcp';
 import { initKeys, getApiKey, setApiKey, hasApiKey } from './keys';
 import { setDevRunActive, isDevRunActive } from './devMode';
 import { collectRules, appendMemory } from './rules';
 import { discoverSkills, loadSkill, discoverSubagents, runHooks, hasHooks, listHooks } from './extensibility';
+import { browserScreenshot, browserSnapshot, resolveTarget } from './browser';
 import * as cp from 'child_process';
 import * as os from 'os';
 import * as path from 'path';
@@ -57,6 +58,8 @@ interface Plan {
 	title: string;
 	status: 'proposed' | 'running' | 'done' | 'cancelled';
 	steps: PlanStep[];
+	/** Workspace-relative path of the durable plan doc (.openova/plans/*.md). */
+	file?: string;
 }
 
 interface UiMessage {
@@ -1058,11 +1061,14 @@ class OpenovaChatViewProvider implements vscode.WebviewViewProvider {
 					// waiting agent loop — same run continues.
 					this.planResolvers.delete(sid);
 					let finalSteps: string[] = [];
+					let approvedPlan: Plan | null = null;
 					this.mutatePlan(sid, pr.msgId, (p) => {
 						p.steps = p.steps.filter((s) => s.text.trim());
 						p.status = 'running';
 						finalSteps = p.steps.map((s) => s.text);
+						approvedPlan = p;
 					});
+					if (approvedPlan) { this.writePlanFile(approvedPlan); }
 					this.persist();
 					this.postSessions();
 					trace(`plan approved in-run (${finalSteps.length} steps)`);
@@ -1191,6 +1197,9 @@ class OpenovaChatViewProvider implements vscode.WebviewViewProvider {
 				this.persist();
 				this.postSessions();
 				break;
+			case 'rewindTo':
+				await this.rewindTo(String(msg.sessionId), String(msg.msgId));
+				break;
 			case 'undoWrites':
 				await this.undoWrites(String(msg.sessionId), String(msg.msgId), false);
 				break;
@@ -1294,6 +1303,43 @@ class OpenovaChatViewProvider implements vscode.WebviewViewProvider {
 		return reverted;
 	}
 
+	/**
+	 * Restore checkpoint = full rewind: revert every file the turn changed AND
+	 * truncate the conversation back to just before that turn, so the user can
+	 * re-prompt from a clean state (Cursor / Claude Code /rewind semantics).
+	 */
+	private async rewindTo(sessionId: string, msgId: string): Promise<void> {
+		const sess = this.session(sessionId);
+		if (!sess || this.runs.get(sessionId)) { return; }
+		const mi = sess.messages.findIndex((x) => x.id === msgId);
+		if (mi < 0) { return; }
+		const fileCount = sess.messages[mi].writes?.length ?? 0;
+		// The turn starts at the user message right before this assistant reply.
+		let cut = mi;
+		while (cut > 0 && sess.messages[cut].role !== 'user') { cut--; }
+		const dropped = sess.messages.length - cut;
+		const pick = await vscode.window.showWarningMessage(
+			'Restore this checkpoint?',
+			{
+				modal: true,
+				detail:
+					`${fileCount} changed file(s) are restored to their pre-run state and the last ` +
+					`${dropped} message(s) are removed from the conversation. Unsaved editor changes are never overwritten.`
+			},
+			'Restore'
+		);
+		if (pick !== 'Restore') { return; }
+		const reverted = await this.undoWrites(sessionId, msgId, true);
+		sess.messages.splice(cut);
+		sess.updatedAt = Date.now();
+		this.persist();
+		this.postSessions();
+		trace(`rewind: dropped ${dropped} messages, reverted ${reverted} files`);
+		void vscode.window.showInformationMessage(
+			`Openova: checkpoint restored — ${reverted}/${fileCount} file(s) reverted, conversation rewound.`
+		);
+	}
+
 	// ---- auto-title ----------------------------------------------------------
 
 	private autoTitle(sessionId: string): void {
@@ -1391,6 +1437,34 @@ class OpenovaChatViewProvider implements vscode.WebviewViewProvider {
 		this.postSessions();
 	}
 
+	/**
+	 * Approved plans live as durable markdown docs (.openova/plans/*.md) so
+	 * they survive the session and other tools/agents can read them. Called at
+	 * approval and again on every check-off / settle to keep the doc current.
+	 */
+	private writePlanFile(plan: Plan): void {
+		const root = vscode.workspace.workspaceFolders?.[0]?.uri.fsPath;
+		if (!root) { return; }
+		try {
+			if (!plan.file) {
+				const slug =
+					plan.title.toLowerCase().replace(/[^a-z0-9]+/g, '-').replace(/^-+|-+$/g, '').slice(0, 48) || 'plan';
+				plan.file = `.openova/plans/${slug}.md`;
+			}
+			const full = path.join(root, plan.file);
+			fs.mkdirSync(path.dirname(full), { recursive: true });
+			const body =
+				`# Plan: ${plan.title}\n\n` +
+				`Status: ${plan.status}\n\n` +
+				plan.steps.map((s, i) => `- [${s.done ? 'x' : ' '}] ${i + 1}. ${s.text}`).join('\n') +
+				'\n';
+			fs.writeFileSync(full, body, 'utf8');
+			trace(`plan file: ${plan.file} (${plan.status})`);
+		} catch {
+			/* the plan doc is best-effort — never block the run on it */
+		}
+	}
+
 	/** Draft an editable step-by-step plan (approve to execute). */
 	private async sendPlan(sessionId: string, text: string, displayText = text): Promise<void> {
 		const sess = this.session(sessionId)!;
@@ -1465,6 +1539,7 @@ class OpenovaChatViewProvider implements vscode.WebviewViewProvider {
 		if (!steps.length) { return; }
 		plan.steps = steps;
 		plan.status = 'running';
+		this.writePlanFile(plan);
 		this.persist();
 		this.postSessions();
 		const task =
@@ -1619,6 +1694,28 @@ class OpenovaChatViewProvider implements vscode.WebviewViewProvider {
 			const def = discoverSubagents(root!).find((d) => d.name.toLowerCase() === type.toLowerCase());
 			return def ? { prompt: def.prompt, model: def.model, tools: def.tools } : null;
 		};
+		// Browser tools: headless Edge/Chrome does the reading; browser_open
+		// mirrors the URL into the Agents-window browser pane for the user.
+		tools.screenshot = async (target) => {
+			const r = await browserScreenshot(root!, target);
+			if (r.ok && r.path) {
+				trace(`screenshot: ${r.path}`);
+				try {
+					await vscode.commands.executeCommand('vscode.open', vscode.Uri.file(r.path), vscode.ViewColumn.Beside);
+				} catch { /* preview is best-effort */ }
+			}
+			return r;
+		};
+		tools.browserOpen = async (url) => {
+			const resolved = resolveTarget(root!, url);
+			trace(`browser_open: ${resolved}`);
+			this.post({ type: 'openBrowser', url: resolved });
+			return `Opened ${resolved} in the browser pane (visible to the user). Use browser_snapshot to read its content yourself.`;
+		};
+		tools.browserSnapshot = async (target) => {
+			trace(`browser_snapshot: ${target.slice(0, 120)}`);
+			return browserSnapshot(root!, target);
+		};
 		if (hasHooks(root!)) {
 			tools.preToolHook = async (tool, args) => {
 				const r = await runHooks(root!, 'PreToolUse', {
@@ -1658,7 +1755,7 @@ class OpenovaChatViewProvider implements vscode.WebviewViewProvider {
 		// MCP: connect configured servers and expose their tools to this run.
 		const mcpServers = vscode.workspace
 			.getConfiguration('openova')
-			.get<{ name: string; command: string }[]>('mcpServers', []);
+			.get<McpServerConfig[]>('mcpServers', []);
 		let mcpRules = '';
 		if (mcpServers.length) {
 			try {
@@ -1692,10 +1789,13 @@ class OpenovaChatViewProvider implements vscode.WebviewViewProvider {
 		const activePlanSessionId = opts.plan?.sessionId ?? sessionId;
 		tools.updatePlan = (stepIndex) => {
 			if (!activePlanMsgId) { return; }
+			let planRef: Plan | null = null;
 			this.mutatePlan(activePlanSessionId, activePlanMsgId, (p) => {
 				const st = p.steps[stepIndex - 1];
 				if (st) { st.done = true; }
+				planRef = p;
 			});
+			if (planRef) { this.writePlanFile(planRef); }
 		};
 		tools.proposePlan = (planTitle, stepTexts) =>
 			new Promise<string[] | null>((resolve) => {
@@ -1905,6 +2005,7 @@ class OpenovaChatViewProvider implements vscode.WebviewViewProvider {
 				// Settle the plan card: a clean finish completes it (weak models
 				// often skip update_plan), a stop leaves it cancelled.
 				const stopped = this.runs.get(sessionId)?.stop ?? false;
+				let settledPlan: Plan | null = null;
 				this.mutatePlan(activePlanSessionId, activePlanMsgId, (p) => {
 					if (p.status === 'running') {
 						if (stopped) {
@@ -1914,7 +2015,9 @@ class OpenovaChatViewProvider implements vscode.WebviewViewProvider {
 							for (const st of p.steps) { st.done = true; }
 						}
 					}
+					settledPlan = p;
 				});
+				if (settledPlan) { this.writePlanFile(settledPlan); }
 				trace('plan run finished');
 			}
 			this.post({ type: 'live', sessionId, msgId: agentMsg.id, text: '' });

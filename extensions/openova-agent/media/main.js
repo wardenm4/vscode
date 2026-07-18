@@ -1095,9 +1095,9 @@
 						next && next.writes && next.writes.some((w) => w.isNew || w.before !== undefined);
 					if (restorable) {
 						const rc = el('button', 'restore', 'Restore checkpoint');
-						rc.title = 'Restore every file this turn changed to its pre-run state';
+						rc.title = 'Revert every file this turn changed AND rewind the conversation to before this message';
 						rc.onclick = () =>
-							vscode.postMessage({ type: 'undoWrites', sessionId: active, msgId: next.id });
+							vscode.postMessage({ type: 'rewindTo', sessionId: active, msgId: next.id });
 						box.appendChild(rc);
 					}
 				}
@@ -1822,6 +1822,17 @@
 			case 'theme':
 				currentTheme = m.current || '';
 				render();
+				break;
+			case 'openBrowser':
+				// Agent-driven: surface the browser pane at the requested URL.
+				if (isWindow) {
+					toolView = 'browser';
+					if (m.url) {
+						browserUrl = m.url;
+						browserLoaded = m.url;
+					}
+					render();
+				}
 				break;
 			case 'agentWrote':
 				if (!sessionFiles.includes(m.path)) { sessionFiles.unshift(m.path); }

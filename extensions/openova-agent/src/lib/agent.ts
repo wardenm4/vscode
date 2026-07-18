@@ -37,6 +37,12 @@ export interface AgentTools {
 	) => Promise<{ ok: boolean; output: string }>;
 	/** Captures a screenshot of a URL / HTML file for visual verification. */
 	screenshot?: (target: string) => Promise<{ ok: boolean; path?: string; error?: string }>;
+	/** Waits on a background job (exit / output pattern) or plain seconds. */
+	awaitJob?: (args: { job?: string; pattern?: string; seconds?: string; timeout?: string }) => Promise<string>;
+	/** Opens a URL in the visible browser pane; resolves with a note. */
+	browserOpen?: (url: string) => Promise<string>;
+	/** Renders a URL/file headlessly and returns its visible text content. */
+	browserSnapshot?: (target: string) => Promise<string>;
 	/** Asks the user one multiple-choice question; resolves with their answer. */
 	askUser?: (question: string, options: string[]) => Promise<string>;
 	/**
@@ -131,6 +137,18 @@ FULL contents of the file, exactly as they should be saved to disk.
 <tool name="screenshot">http://localhost:5173 or relative/page.html</tool>
     Capture a screenshot of a URL or HTML file you built, to visually verify
     UI work. The image is attached to the conversation for the user to review.
+<tool name="await" job="1" pattern="ready in" timeout="60"></tool>
+    Wait on a background job started with run_command background="true": with
+    pattern, returns as soon as that text appears in the job's output; without
+    it, waits for the job to exit. Omit job to use the most recent one. Use
+    <tool name="await" seconds="5"></tool> to just pause briefly.
+<tool name="browser_open">http://localhost:5173</tool>
+    Open a URL in the editor's browser pane so the user can see the page you
+    are working on. Use it after starting a dev server or building a page.
+<tool name="browser_snapshot">http://localhost:5173 or relative/page.html</tool>
+    Load a page in a headless browser and get back its rendered TEXT content
+    (with links). Use it to verify what a page actually shows, check a dev
+    server response, or read documentation pages.
 <tool name="ask_user" question="How should we build it? (I recommend A for a basic app.)">
 A — Single-page web app, data in localStorage. Fastest, works offline.
 B — Next.js + cloud database. Sync across devices, more setup.
@@ -535,7 +553,51 @@ export async function runAgent(
 					toolFailed = !r.ok;
 					break;
 				}
-				case 'mcp_call': {
+				case 'await': {
+					if (!tools.awaitJob) {
+						observation = 'Waiting on background jobs is not available here.';
+						toolFailed = true;
+						break;
+					}
+					observation = await tools.awaitJob({
+						job: action.args.job === undefined ? undefined : String(action.args.job),
+						pattern: action.args.pattern === undefined ? undefined : String(action.args.pattern),
+						seconds: action.args.seconds === undefined ? undefined : String(action.args.seconds),
+						timeout: action.args.timeout === undefined ? undefined : String(action.args.timeout)
+					});
+					break;
+				}
+				case 'browser_open': {
+					const url = String(action.args.url ?? '').trim();
+					if (!tools.browserOpen) {
+						observation = 'The browser pane is not available here.';
+						toolFailed = true;
+						break;
+					}
+					if (!url) {
+						observation = 'Error: browser_open needs a URL in the tool body.';
+						toolFailed = true;
+						break;
+					}
+					observation = await tools.browserOpen(url);
+					break;
+				}
+				case 'browser_snapshot': {
+					const target = String(action.args.url ?? '').trim();
+					if (!tools.browserSnapshot) {
+						observation = 'Headless browsing is not available here.';
+						toolFailed = true;
+						break;
+					}
+					if (!target) {
+						observation = 'Error: browser_snapshot needs a URL or file path in the tool body.';
+						toolFailed = true;
+						break;
+					}
+					observation = await tools.browserSnapshot(target);
+					break;
+				}
+					case 'mcp_call': {
 					const server = String(action.args.server ?? '').trim();
 					const toolName = String(action.args.tool ?? '').trim();
 					if (!tools.callMcp) {
@@ -699,5 +761,8 @@ function restrictTools(tools: AgentTools, allowed: string[]): AgentTools {
 	if (!allow.has('run_command')) { t.runCommand = deny('run_command') as AgentTools['runCommand']; }
 	if (!allow.has('mcp_call')) { t.callMcp = undefined; }
 	if (!allow.has('screenshot')) { t.screenshot = undefined; }
+	if (!allow.has('browser_open')) { t.browserOpen = undefined; }
+	if (!allow.has('browser_snapshot')) { t.browserSnapshot = undefined; }
+	if (!allow.has('await')) { t.awaitJob = undefined; }
 	return t;
 }

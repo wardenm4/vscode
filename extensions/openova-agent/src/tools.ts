@@ -111,6 +111,94 @@ async function runShell(
 	});
 }
 
+// ---- background jobs (awaitable) -------------------------------------------
+// Background commands run as tracked child processes so the agent can `await`
+// their output or exit — Cursor/Codex-style "start the dev server, then wait
+// for it to say ready". Output also mirrors to an output channel for the user.
+
+interface BgJob {
+	id: number;
+	cmd: string;
+	output: string;
+	exitCode: number | null;
+	done: boolean;
+}
+
+const bgJobs = new Map<number, BgJob>();
+let nextJobId = 1;
+let jobChannel: vscode.OutputChannel | undefined;
+
+function startBgJob(cmd: string, cwd: string): BgJob {
+	jobChannel ??= vscode.window.createOutputChannel('Openova agent jobs');
+	const job: BgJob = { id: nextJobId++, cmd, output: '', exitCode: null, done: false };
+	bgJobs.set(job.id, job);
+	jobChannel.appendLine(`[job ${job.id}] $ ${cmd}`);
+	try {
+		const child = cp.spawn(cmd, [], { shell: true, cwd, windowsHide: true });
+		const cap = (chunk: Buffer): void => {
+			const text = chunk.toString('utf8');
+			if (job.output.length < 200_000) { job.output += text; }
+			jobChannel!.append(text);
+		};
+		child.stdout?.on('data', cap);
+		child.stderr?.on('data', cap);
+		child.on('error', (e) => {
+			job.output += `\n${e.message}`;
+			job.done = true;
+		});
+		child.on('close', (code) => {
+			job.exitCode = code;
+			job.done = true;
+			jobChannel!.appendLine(`\n[job ${job.id}] exited ${code}`);
+		});
+	} catch (e) {
+		job.output = e instanceof Error ? e.message : String(e);
+		job.done = true;
+	}
+	return job;
+}
+
+/**
+ * Wait for a background job to exit, or for a pattern to appear in its
+ * output, or for a plain number of seconds. Returns the observation text.
+ */
+export async function awaitTool(args: {
+	job?: string;
+	pattern?: string;
+	seconds?: string;
+	timeout?: string;
+}): Promise<string> {
+	const timeoutMs = Math.min(Math.max((Number(args.timeout) || 60), 1), 600) * 1000;
+	// Plain sleep: <tool name="await" seconds="5"/>
+	if (args.seconds && !args.job && !args.pattern) {
+		const ms = Math.min(Math.max(Number(args.seconds) || 1, 1), 300) * 1000;
+		await new Promise((r) => setTimeout(r, ms));
+		return `Waited ${ms / 1000}s.`;
+	}
+	// Resolve the job: explicit id, else the most recent one.
+	const id = args.job ? Number(args.job) : Math.max(0, ...bgJobs.keys());
+	const job = bgJobs.get(id);
+	if (!job) {
+		return bgJobs.size
+			? `No background job #${args.job}. Running jobs: ${[...bgJobs.keys()].join(', ')}`
+			: 'No background jobs have been started (use run_command with background="true" first).';
+	}
+	const start = Date.now();
+	const patt = args.pattern?.trim();
+	for (; ;) {
+		if (patt && job.output.toLowerCase().includes(patt.toLowerCase())) {
+			return `Job ${job.id} output matched "${patt}":\n${job.output.slice(-4000)}`;
+		}
+		if (job.done) {
+			return `Job ${job.id} exited ${job.exitCode}. Output:\n${job.output.slice(-6000)}`;
+		}
+		if (Date.now() - start > timeoutMs) {
+			return `Timed out after ${timeoutMs / 1000}s waiting on job ${job.id} (still running). Output so far:\n${job.output.slice(-4000)}`;
+		}
+		await new Promise((r) => setTimeout(r, 250));
+	}
+}
+
 /** Ask the user to approve a command the gate didn't auto-allow. */
 async function approveCommand(
 	host: ToolHost,
@@ -245,13 +333,16 @@ export function createTools(host: ToolHost): AgentTools {
 				if (!ok) { return { output: `(declined: ${prompt} approval)`, exitCode: null, denied: true }; }
 			}
 			if (background) {
-				const term = vscode.window.createTerminal({ name: 'Openova agent', cwd: host.root });
-				term.show(true);
-				term.sendText(cmd, true);
-				return { output: `(started in terminal: ${cmd})`, exitCode: 0 };
+				const job = startBgJob(cmd, host.root);
+				return {
+					output: `(started background job ${job.id}: ${cmd} — use <tool name="await" job="${job.id}"> to wait for output or exit)`,
+					exitCode: 0
+				};
 			}
 			return runShell(cmd, host.root, 120_000);
 		},
+
+		awaitJob: (args) => awaitTool(args),
 
 		check: undefined // wired by the caller when openova.checkCommand is set
 	};

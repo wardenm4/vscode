@@ -194,7 +194,7 @@
         "openova.mcpServers": {
           "type": "array",
           "default": [],
-          "description": "MCP servers available to the agent (stdio). Each entry: { \"name\": \"docs\", \"command\": \"npx some-mcp-server\" }.",
+          "description": "MCP servers available to the agent. Local stdio: { \"name\": \"docs\", \"command\": \"npx some-mcp-server\" }. Remote Streamable HTTP: { \"name\": \"linear\", \"url\": \"https://mcp.example.com/mcp\", \"headers\": { \"authorization\": \"Bearer ...\" } }.",
           "items": {
             "type": "object",
             "properties": {
@@ -202,7 +202,19 @@
                 "type": "string"
               },
               "command": {
-                "type": "string"
+                "type": "string",
+                "description": "Shell command for a local stdio server."
+              },
+              "url": {
+                "type": "string",
+                "description": "Endpoint of a remote Streamable HTTP server (used when set; command is ignored)."
+              },
+              "headers": {
+                "type": "object",
+                "description": "Extra HTTP headers (e.g. authorization) sent to a remote server.",
+                "additionalProperties": {
+                  "type": "string"
+                }
               }
             }
           }
