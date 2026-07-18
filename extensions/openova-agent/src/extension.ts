@@ -21,7 +21,8 @@ import { initKeys, getApiKey, setApiKey, hasApiKey } from './keys';
 import { setDevRunActive, isDevRunActive } from './devMode';
 import { collectRules, appendMemory } from './rules';
 import { discoverSkills, loadSkill, discoverSubagents, runHooks, hasHooks, listHooks } from './extensibility';
-import { browserScreenshot, browserSnapshot, resolveTarget } from './browser';
+import { browserScreenshot, browserSnapshot, resolveTarget, htmlToText, saveScreenshot } from './browser';
+import { CdpBrowser, clickJs, typeJs, disposeAllCdp } from './cdp';
 import { parseRouteSpec, type Route } from './lib/router';
 import { estTokens, estimateCost, fmtCost } from './lib/pricing';
 import {
@@ -391,8 +392,9 @@ export function activate(context: vscode.ExtensionContext): void {
 
 export function deactivate(): void {
 	// In-flight model requests die with the extension host process; MCP server
-	// child processes need an explicit tree-kill.
+	// and headless-browser child processes need an explicit tree-kill.
 	disposeMcp();
+	disposeAllCdp();
 }
 
 class OpenovaChatViewProvider implements vscode.WebviewViewProvider {
@@ -414,6 +416,8 @@ class OpenovaChatViewProvider implements vscode.WebviewViewProvider {
 	/** Resolvers for in-run propose_plan cards awaiting approval (sessionId). */
 	private readonly planResolvers = new Map<string, { msgId: string; resolve: (steps: string[] | null) => void }>();
 	private automations: Automation[] = [];
+	/** Persistent interactive browser session for the browser_* tools. */
+	private cdp: CdpBrowser | null = null;
 	/** One-shot view hint for the next webview init (dev harness). */
 	pendingView: string | null = null;
 
@@ -1985,10 +1989,22 @@ class OpenovaChatViewProvider implements vscode.WebviewViewProvider {
 			const def = discoverSubagents(root!).find((d) => d.name.toLowerCase() === type.toLowerCase());
 			return def ? { prompt: def.prompt, model: def.model, tools: def.tools } : null;
 		};
-		// Browser tools: headless Edge/Chrome does the reading; browser_open
-		// mirrors the URL into the Agents-window browser pane for the user.
+		// Browser tools: browser_open starts/navigates a persistent CDP session
+		// (page state survives across tool calls) and mirrors the URL into the
+		// Agents-window browser pane; click/type/snapshot work on that session.
 		tools.screenshot = async (target) => {
-			const r = await browserScreenshot(root!, target);
+			let r: { ok: boolean; path?: string; error?: string };
+			if (!target.trim() && this.cdp?.alive) {
+				try {
+					r = { ok: true, path: saveScreenshot(root!, await this.cdp.screenshotBase64()) };
+				} catch (e) {
+					r = { ok: false, error: e instanceof Error ? e.message : String(e) };
+				}
+			} else if (!target.trim()) {
+				r = { ok: false, error: 'screenshot needs a URL/file, or an open browser session (browser_open first).' };
+			} else {
+				r = await browserScreenshot(root!, target);
+			}
 			if (r.ok && r.path) {
 				trace(`screenshot: ${r.path}`);
 				try {
@@ -2001,11 +2017,66 @@ class OpenovaChatViewProvider implements vscode.WebviewViewProvider {
 			const resolved = resolveTarget(root!, url);
 			trace(`browser_open: ${resolved}`);
 			this.post({ type: 'openBrowser', url: resolved });
-			return `Opened ${resolved} in the browser pane (visible to the user). Use browser_snapshot to read its content yourself.`;
+			try {
+				if (!this.cdp?.alive) {
+					this.cdp = new CdpBrowser();
+					await this.cdp.launch();
+				}
+				await this.cdp.navigate(resolved);
+				trace(`cdp navigated: ${this.cdp.currentUrl}`);
+				return `Opened ${this.cdp.currentUrl} — interactive session ready (browser_click / browser_type / browser_snapshot with empty body read THIS page). Also shown to the user in the browser pane.`;
+			} catch (e) {
+				this.cdp?.dispose();
+				this.cdp = null;
+				return `Opened ${resolved} in the user's browser pane, but the interactive session failed (${e instanceof Error ? e.message : String(e)}) — browser_snapshot with a URL still works.`;
+			}
 		};
 		tools.browserSnapshot = async (target) => {
-			trace(`browser_snapshot: ${target.slice(0, 120)}`);
+			trace(`browser_snapshot: ${target.slice(0, 120) || '(live page)'}`);
+			if (!target.trim()) {
+				if (!this.cdp?.alive) {
+					return 'Error: no live browser session — call browser_open with a URL first (or pass a URL to browser_snapshot).';
+				}
+				const html = String(await this.cdp.evaluate('document.documentElement.outerHTML'));
+				return htmlToText(html, this.cdp.currentUrl);
+			}
+			if (this.cdp?.alive) {
+				// Keep the session on the page the agent is inspecting.
+				await this.cdp.navigate(resolveTarget(root!, target));
+				const html = String(await this.cdp.evaluate('document.documentElement.outerHTML'));
+				return htmlToText(html, this.cdp.currentUrl);
+			}
 			return browserSnapshot(root!, target);
+		};
+		tools.browserClick = async (selector) => {
+			if (!this.cdp?.alive) {
+				return 'Error: no live browser session — call browser_open with a URL first.';
+			}
+			trace(`browser_click: ${selector.slice(0, 80)}`);
+			try {
+				const r = (await this.cdp.evaluate(clickJs(selector))) as { ok: boolean; error?: string; tag?: string; text?: string; href?: string };
+				if (!r.ok) { return `Error: ${r.error ?? 'click failed'} for "${selector}"`; }
+				// Clicks often navigate — give the page a beat, then report where we are.
+				await new Promise((res) => setTimeout(res, 500));
+				this.cdp.currentUrl = String(await this.cdp.evaluate('location.href').catch(() => this.cdp!.currentUrl));
+				return `Clicked <${r.tag}> "${r.text ?? ''}"${r.href ? ` (href ${r.href})` : ''}. Now at ${this.cdp.currentUrl}. Use browser_snapshot (empty body) to read the page.`;
+			} catch (e) {
+				return `Error: ${e instanceof Error ? e.message : String(e)}`;
+			}
+		};
+		tools.browserType = async (selector, text, enter) => {
+			if (!this.cdp?.alive) {
+				return 'Error: no live browser session — call browser_open with a URL first.';
+			}
+			trace(`browser_type: ${selector.slice(0, 60)} <- ${text.slice(0, 40)}${enter ? ' [enter]' : ''}`);
+			try {
+				const r = (await this.cdp.evaluate(typeJs(selector, text, enter))) as { ok: boolean; error?: string; tag?: string; value?: string };
+				if (!r.ok) { return `Error: ${r.error ?? 'type failed'} for "${selector}"`; }
+				if (enter) { await new Promise((res) => setTimeout(res, 500)); }
+				return `Typed into <${r.tag}> (value now "${r.value ?? ''}")${enter ? ' and pressed Enter' : ''}.`;
+			} catch (e) {
+				return `Error: ${e instanceof Error ? e.message : String(e)}`;
+			}
 		};
 		if (hasHooks(root!)) {
 			tools.preToolHook = async (tool, args) => {

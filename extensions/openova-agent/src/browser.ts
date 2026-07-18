@@ -87,6 +87,15 @@ function runBrowser(args: string[], timeoutMs: number): Promise<{ ok: boolean; o
 	});
 }
 
+/** Persist a base64 PNG (e.g. a CDP capture) under .openova/assets. */
+export function saveScreenshot(root: string, base64Png: string): string {
+	const dir = path.join(root, '.openova', 'assets');
+	try { fs.mkdirSync(dir, { recursive: true }); } catch { /* exists */ }
+	const out = path.join(dir, `shot-${Date.now()}.png`);
+	fs.writeFileSync(out, Buffer.from(base64Png, 'base64'));
+	return out;
+}
+
 /** Screenshot a URL/file to a PNG under the workspace .openova/assets dir. */
 export async function browserScreenshot(
 	root: string,
@@ -103,14 +112,10 @@ export async function browserScreenshot(
 	return fs.existsSync(out) ? { ok: true, path: out } : { ok: false, error: 'screenshot failed' };
 }
 
-/** Render a URL/file headlessly and return its visible text content. */
-export async function browserSnapshot(root: string, target: string): Promise<string> {
-	const url = resolveTarget(root, target);
-	const r = await runBrowser(['--dump-dom', '--virtual-time-budget=4000', url], 25_000);
-	if (!r.ok && !r.output.trim()) { return `Could not load ${url}.`; }
-	// Reduce the rendered DOM to readable text: drop script/style, keep title
-	// and link hrefs (so the agent can navigate), collapse whitespace.
-	let html = r.output;
+/** Reduce rendered HTML to readable text: drop script/style, keep the title
+ *  and link hrefs (so the agent can navigate), collapse whitespace. */
+export function htmlToText(rawHtml: string, url: string): string {
+	let html = rawHtml;
 	const title = /<title[^>]*>([\s\S]*?)<\/title>/i.exec(html)?.[1]?.trim() ?? '';
 	html = html.replace(/<script[\s\S]*?<\/script>/gi, ' ').replace(/<style[\s\S]*?<\/style>/gi, ' ');
 	html = html.replace(/<a\s[^>]*href="([^"#][^"]*)"[^>]*>([\s\S]*?)<\/a>/gi, (_m, href, inner) => {
@@ -132,4 +137,12 @@ export async function browserSnapshot(root: string, target: string): Promise<str
 		.join('\n')
 		.slice(0, 8000);
 	return `Page: ${url}${title ? `\nTitle: ${title}` : ''}\n\n${text || '(no visible text)'}`;
+}
+
+/** Render a URL/file headlessly (one-shot) and return its visible text. */
+export async function browserSnapshot(root: string, target: string): Promise<string> {
+	const url = resolveTarget(root, target);
+	const r = await runBrowser(['--dump-dom', '--virtual-time-budget=4000', url], 25_000);
+	if (!r.ok && !r.output.trim()) { return `Could not load ${url}.`; }
+	return htmlToText(r.output, url);
 }

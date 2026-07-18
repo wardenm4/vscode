@@ -43,6 +43,10 @@ export interface AgentTools {
 	browserOpen?: (url: string) => Promise<string>;
 	/** Renders a URL/file headlessly and returns its visible text content. */
 	browserSnapshot?: (target: string) => Promise<string>;
+	/** Clicks an element (CSS selector or visible text) in the live session. */
+	browserClick?: (selector: string) => Promise<string>;
+	/** Types into an input in the live session; optionally presses Enter. */
+	browserType?: (selector: string, text: string, enter: boolean) => Promise<string>;
 	/** Asks the user one multiple-choice question; resolves with their answer. */
 	askUser?: (question: string, options: string[]) => Promise<string>;
 	/**
@@ -145,12 +149,20 @@ FULL contents of the file, exactly as they should be saved to disk.
     it, waits for the job to exit. Omit job to use the most recent one. Use
     <tool name="await" seconds="5"></tool> to just pause briefly.
 <tool name="browser_open">http://localhost:5173</tool>
-    Open a URL in the editor's browser pane so the user can see the page you
-    are working on. Use it after starting a dev server or building a page.
+    Open a URL: shows it in the editor's browser pane for the user AND starts
+    (or navigates) your own interactive browser session, so browser_click /
+    browser_type / browser_snapshot then work on that live page.
 <tool name="browser_snapshot">http://localhost:5173 or relative/page.html</tool>
-    Load a page in a headless browser and get back its rendered TEXT content
-    (with links). Use it to verify what a page actually shows, check a dev
-    server response, or read documentation pages.
+    Get a page's rendered TEXT content (with links). With a live session open
+    (after browser_open) an EMPTY body reads the CURRENT page including any
+    state your clicks/typing created; with a URL it loads that page fresh.
+<tool name="browser_click">CSS selector or visible text, e.g. #save or Add note</tool>
+    Click an element in the live session (start one with browser_open first).
+    Matches a CSS selector, else a button/link by its visible text. Follow
+    with browser_snapshot to see what changed.
+<tool name="browser_type" selector="#name" enter="true">text to type</tool>
+    Type into an input/textarea in the live session (selector attribute picks
+    the field; the body is the text). Add enter="true" to submit after.
 <tool name="ask_user" question="How should we build it? (I recommend A for a basic app.)">
 A — Single-page web app, data in localStorage. Fastest, works offline.
 B — Next.js + cloud database. Sync across devices, more setup.
@@ -591,12 +603,42 @@ export async function runAgent(
 						toolFailed = true;
 						break;
 					}
-					if (!target) {
-						observation = 'Error: browser_snapshot needs a URL or file path in the tool body.';
+					// An empty target reads the LIVE session's current page (the
+					// host errors helpfully when no session is open).
+					observation = await tools.browserSnapshot(target);
+					break;
+				}
+				case 'browser_click': {
+					const sel = String(action.args.selector ?? '').trim();
+					if (!tools.browserClick) {
+						observation = 'Browser interaction is not available here.';
 						toolFailed = true;
 						break;
 					}
-					observation = await tools.browserSnapshot(target);
+					if (!sel) {
+						observation = 'Error: browser_click needs a CSS selector or visible text in the tool body.';
+						toolFailed = true;
+						break;
+					}
+					observation = await tools.browserClick(sel);
+					toolFailed = observation.startsWith('Error');
+					break;
+				}
+				case 'browser_type': {
+					const sel = String(action.args.selector ?? '').trim();
+					const typedText = String(action.args.text ?? '');
+					if (!tools.browserType) {
+						observation = 'Browser interaction is not available here.';
+						toolFailed = true;
+						break;
+					}
+					if (!sel) {
+						observation = 'Error: browser_type needs a selector attribute.';
+						toolFailed = true;
+						break;
+					}
+					observation = await tools.browserType(sel, typedText, String(action.args.enter ?? '') === 'true');
+					toolFailed = observation.startsWith('Error');
 					break;
 				}
 					case 'mcp_call': {
@@ -730,7 +772,10 @@ export async function runAgent(
 						}
 						cb.onObservation('All checks passed.', false);
 					}
-					cb.onFinish(String(action.args.summary ?? 'Done.'));
+					// Weak models sometimes put the answer BEFORE an empty finish tag
+					// (it lands in `thought`) — salvage it instead of reporting "Done.".
+					const summary = String(action.args.summary ?? 'Done.');
+					cb.onFinish(summary === 'Done.' && action.thought ? action.thought : summary);
 					return;
 				}
 				default:
@@ -765,6 +810,8 @@ function restrictTools(tools: AgentTools, allowed: string[]): AgentTools {
 	if (!allow.has('screenshot')) { t.screenshot = undefined; }
 	if (!allow.has('browser_open')) { t.browserOpen = undefined; }
 	if (!allow.has('browser_snapshot')) { t.browserSnapshot = undefined; }
+	if (!allow.has('browser_click')) { t.browserClick = undefined; }
+	if (!allow.has('browser_type')) { t.browserType = undefined; }
 	if (!allow.has('await')) { t.awaitJob = undefined; }
 	return t;
 }

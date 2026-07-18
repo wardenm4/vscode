@@ -32,6 +32,8 @@ export const TOOL_NAMES = [
 	'await',
 	'browser_open',
 	'browser_snapshot',
+	'browser_click',
+	'browser_type',
 	'finish'
 ];
 
@@ -111,6 +113,13 @@ function buildAction(tool: string, attrs: string, body: string): Action {
 		if (timeout !== undefined) {args.timeout = timeout;}
 	} else if (tool === 'browser_open' || tool === 'browser_snapshot')
 		{args.url = readAttr(attrs, 'url') ?? inner;}
+	else if (tool === 'browser_click')
+		{args.selector = readAttr(attrs, 'selector') ?? inner;}
+	else if (tool === 'browser_type') {
+		args.selector = readAttr(attrs, 'selector') ?? '';
+		args.text = inner;
+		args.enter = readAttr(attrs, 'enter') ?? '';
+	}
 	else if (tool === 'remember') {args.fact = inner;}
 	// NOTE: the tag's own name attr is taken — the skill goes in `skill` or body.
 	else if (tool === 'use_skill') {args.name = readAttr(attrs, 'skill') ?? inner;}
