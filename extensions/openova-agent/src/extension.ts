@@ -24,6 +24,10 @@ import { discoverSkills, loadSkill, discoverSubagents, runHooks, hasHooks, listH
 import { browserScreenshot, browserSnapshot, resolveTarget } from './browser';
 import { parseRouteSpec, type Route } from './lib/router';
 import { estTokens, estimateCost, fmtCost } from './lib/pricing';
+import {
+	specSlug, specDir, writeSpecFile, requirementsPrompt, designPrompt, tasksPrompt,
+	TRIVIAL_MARKER, docTitle, requirementTitles, taskSteps, checkOffTasks
+} from './spec';
 import * as cp from 'child_process';
 import * as os from 'os';
 import * as path from 'path';
@@ -94,7 +98,7 @@ interface Session {
 interface QueuedItem {
 	id: string;
 	text: string;
-	mode: 'ask' | 'agent' | 'plan';
+	mode: 'ask' | 'agent' | 'plan' | 'spec';
 }
 
 interface Automation {
@@ -365,7 +369,7 @@ export function activate(context: vscode.ExtensionContext): void {
 						return;
 					}
 					if (!req.text) { return; }
-					const mode = req.mode === 'ask' ? 'ask' : req.mode === 'plan' ? 'plan' : 'agent';
+					const mode = req.mode === 'ask' ? 'ask' : req.mode === 'plan' ? 'plan' : req.mode === 'spec' ? 'spec' : 'agent';
 					await provider.startRun(req.text, mode, req.context ?? []);
 					if (req.thenApprove) {
 						const ok = await provider.approveLastPlan();
@@ -781,7 +785,7 @@ class OpenovaChatViewProvider implements vscode.WebviewViewProvider {
 	/** Programmatic entry point (URI handler / commands / dev harness). */
 	async startRun(
 		text: string,
-		mode: 'ask' | 'agent' | 'plan',
+		mode: 'ask' | 'agent' | 'plan' | 'spec',
 		contextPaths: string[] = []
 	): Promise<void> {
 		const sessionId = this.activeSession;
@@ -794,7 +798,7 @@ class OpenovaChatViewProvider implements vscode.WebviewViewProvider {
 	private async dispatch(
 		sessionId: string,
 		text: string,
-		mode: 'ask' | 'agent' | 'plan',
+		mode: 'ask' | 'agent' | 'plan' | 'spec',
 		contextPaths: string[]
 	): Promise<void> {
 		let contextBlock = '';
@@ -829,6 +833,7 @@ class OpenovaChatViewProvider implements vscode.WebviewViewProvider {
 			});
 		}
 		else if (mode === 'plan') { await this.sendPlan(sessionId, full, text); }
+		else if (mode === 'spec') { await this.sendSpec(sessionId, full, text); }
 		else { await this.sendAsk(sessionId, full, text); }
 	}
 
@@ -1034,7 +1039,7 @@ class OpenovaChatViewProvider implements vscode.WebviewViewProvider {
 			case 'send': {
 				const sessionId = String(msg.sessionId ?? this.activeSession ?? '');
 				const text = String(msg.text ?? '').trim();
-				const mode = msg.mode === 'ask' ? 'ask' : msg.mode === 'plan' ? 'plan' : 'agent';
+				const mode = msg.mode === 'ask' ? 'ask' : msg.mode === 'plan' ? 'plan' : msg.mode === 'spec' ? 'spec' : 'agent';
 				const contextPaths = Array.isArray(msg.context) ? (msg.context as string[]) : [];
 				if (!text || !this.session(sessionId)) { return; }
 				if (this.runs.get(sessionId)) {
@@ -1573,6 +1578,248 @@ class OpenovaChatViewProvider implements vscode.WebviewViewProvider {
 		}
 	}
 
+	// ---- spec mode (Kiro-style) ---------------------------------------------
+
+	/** Show a stage-gate plan card and wait for the user's approve/cancel. */
+	private awaitStageApproval(sessionId: string, cardTitle: string, steps: string[]): Promise<string[] | null> {
+		// Headless harness: approve deterministically so runs never hang.
+		if (isDevRunActive()) {
+			trace(`devSpecApprove: ${cardTitle} (${steps.length} items)`);
+			return Promise.resolve(steps);
+		}
+		const sess = this.session(sessionId)!;
+		const msg: UiMessage = {
+			id: uid(),
+			role: 'assistant',
+			content: '',
+			at: Date.now(),
+			plan: {
+				title: cardTitle,
+				status: 'proposed',
+				steps: steps.map((t) => ({ id: uid(), text: t, done: false }))
+			}
+		};
+		sess.messages.push(msg);
+		this.postSessions();
+		return new Promise((resolve) => {
+			this.planResolvers.set(sessionId, {
+				msgId: msg.id,
+				resolve: (approved) => {
+					// Stage cards settle immediately — they gate, they don't track work.
+					this.mutatePlan(sessionId, msg.id, (p) => {
+						p.status = approved === null ? 'cancelled' : 'done';
+						if (approved !== null) { for (const st of p.steps) { st.done = true; } }
+					});
+					resolve(approved);
+				}
+			});
+		});
+	}
+
+	private specNote(sessionId: string, text: string): void {
+		const sess = this.session(sessionId)!;
+		sess.messages.push({ id: uid(), role: 'assistant', content: text, at: Date.now() });
+		this.persist();
+		this.postSessions();
+	}
+
+	/**
+	 * Kiro-style spec-driven flow: requirements (EARS) -> design -> tasks,
+	 * each written to .openova/specs/<slug>/ and user-gated before the next
+	 * stage; approved tasks then execute as a normal agent run with check-off.
+	 * Scales down: a trivial request skips the ceremony and runs directly.
+	 */
+	private async sendSpec(sessionId: string, text: string, displayText = text): Promise<void> {
+		const root = vscode.workspace.workspaceFolders?.[0]?.uri.fsPath;
+		if (!root) {
+			void vscode.window.showErrorMessage('Openova: open a folder to use Spec mode.');
+			return;
+		}
+		const sess = this.session(sessionId)!;
+		const wasFirstTurn = sess.messages.length === 0;
+		if (wasFirstTurn) { sess.title = displayText.slice(0, 40); }
+		sess.updatedAt = Date.now();
+		sess.messages.push({ id: uid(), role: 'user', content: displayText, at: Date.now() });
+		this.postSessions();
+		this.post({ type: 'running', sessionId, running: true });
+		const run: RunState = { stop: false, requestId: null };
+		this.runs.set(sessionId, run);
+
+		const s = this.settings();
+		const gen = async (system: string, user: string): Promise<string> => {
+			const requestId = uid();
+			run.requestId = requestId;
+			const out = await complete({
+				requestId,
+				provider: s.provider,
+				baseURL: s.baseUrl || undefined,
+				apiKey: await getApiKey(s.provider),
+				model: s.model,
+				system,
+				messages: [{ role: 'user', content: user }],
+				temperature: 0.2,
+				maxTokens: 4096,
+				reasoningEffort: s.effort
+			});
+			return out.replace(/<think(?:ing)?>[\s\S]*?<\/think(?:ing)?>/gi, '').trim();
+		};
+		const rel = (p: string): string => path.relative(root, p).replace(/\\/g, '/');
+
+		let handoff: { task: string; planMsgId?: string; tasksPath?: string } | null = null;
+		try {
+			if (/^\s*consolidate\b/i.test(displayText)) {
+				await this.specConsolidate(sessionId, root, gen);
+				return;
+			}
+			// Stage 1: requirements (or trivial escape hatch)
+			const reqDoc = await gen(requirementsPrompt(), text);
+			if (this.runs.get(sessionId)?.stop) { return; }
+			if (reqDoc.slice(0, 24).toUpperCase().includes(TRIVIAL_MARKER)) {
+				trace('spec: trivial, running directly');
+				this.specNote(sessionId, 'This is small enough to skip the spec ceremony — running it directly.');
+				handoff = { task: text };
+				return;
+			}
+			const title = docTitle(reqDoc, displayText.slice(0, 40));
+			const dir = specDir(root, specSlug(title));
+			const reqPath = writeSpecFile(dir, 'requirements', reqDoc);
+			trace(`spec requirements: ${rel(reqPath)}`);
+			this.specNote(sessionId, `**Spec 1/3 — Requirements** written to \`${rel(reqPath)}\`. Review the EARS criteria, then approve to continue to design.`);
+			const reqOk = await this.awaitStageApproval(
+				sessionId,
+				`Spec 1/3: Requirements — ${title}`,
+				requirementTitles(reqDoc).length ? requirementTitles(reqDoc) : ['Review requirements.md']
+			);
+			if (reqOk === null) { this.specNote(sessionId, 'Spec cancelled at the requirements stage.'); return; }
+
+			// Stage 2: design
+			const designDoc = await gen(designPrompt(), `Task:\n${text}\n\nRequirements document:\n${reqDoc}`);
+			if (this.runs.get(sessionId)?.stop) { return; }
+			const designPath = writeSpecFile(dir, 'design', designDoc);
+			trace(`spec design: ${rel(designPath)}`);
+			const designBullets = (designDoc.match(/^- .+$/gm) ?? []).map((l) => l.replace(/^-\s*/, '').replace(/`/g, '')).slice(0, 8);
+			this.specNote(sessionId, `**Spec 2/3 — Design** written to \`${rel(designPath)}\`. Approve to break it into tasks.`);
+			const designOk = await this.awaitStageApproval(
+				sessionId,
+				`Spec 2/3: Design — ${title}`,
+				designBullets.length ? designBullets : ['Review design.md']
+			);
+			if (designOk === null) { this.specNote(sessionId, 'Spec cancelled at the design stage.'); return; }
+
+			// Stage 3: tasks -> approve -> execute
+			const tasksDoc = await gen(
+				tasksPrompt(),
+				`Task:\n${text}\n\nRequirements document:\n${reqDoc}\n\nDesign document:\n${designDoc}`
+			);
+			if (this.runs.get(sessionId)?.stop) { return; }
+			const tasksPath = writeSpecFile(dir, 'tasks', tasksDoc);
+			trace(`spec tasks: ${rel(tasksPath)}`);
+			const steps = taskSteps(tasksDoc);
+			if (!steps.length) {
+				this.specNote(sessionId, `Spec tasks were written to \`${rel(tasksPath)}\` but contained no checkable tasks — run them manually or retry.`);
+				return;
+			}
+			this.specNote(sessionId, `**Spec 3/3 — Tasks** written to \`${rel(tasksPath)}\` (${steps.length} tasks, requirement-traced). Approve to implement.`);
+			const tasksOk = await this.awaitStageApproval(sessionId, `Spec 3/3: Tasks — ${title}`, steps);
+			if (tasksOk === null) { this.specNote(sessionId, 'Spec cancelled at the tasks stage.'); return; }
+
+			// Executable plan card the run checks off.
+			const planMsg: UiMessage = {
+				id: uid(),
+				role: 'assistant',
+				content: '',
+				at: Date.now(),
+				plan: {
+					title: `Spec: ${title}`,
+					status: 'running',
+					steps: tasksOk.map((t) => ({ id: uid(), text: t, done: false }))
+				}
+			};
+			this.session(sessionId)!.messages.push(planMsg);
+			this.persist();
+			this.postSessions();
+			handoff = {
+				task:
+					`Implement this spec, in order. After completing each task, call ` +
+					`<tool name="update_plan" step="N"></tool> with that task's number. ` +
+					`The full spec lives in ${rel(dir)}/ (requirements.md, design.md, tasks.md) — read those files when you need detail.\n\n` +
+					`Tasks:\n${tasksOk.map((t, i) => `${i + 1}. ${t}`).join('\n')}`,
+				planMsgId: planMsg.id,
+				tasksPath
+			};
+		} catch (e) {
+			this.specNote(sessionId, `**Spec error:** ${e instanceof Error ? e.message : String(e)}`);
+		} finally {
+			this.post({ type: 'running', sessionId, running: false });
+			this.runs.delete(sessionId);
+			if (!handoff) { this.finishRun(sessionId, wasFirstTurn); }
+		}
+		if (handoff) {
+			await this.sendAgent(sessionId, handoff.task, {
+				displayText: handoff.planMsgId ? 'Run spec tasks' : undefined,
+				...(handoff.planMsgId ? { plan: { sessionId, msgId: handoff.planMsgId } } : {})
+			});
+			// Sync tasks.md checkboxes with what the run actually completed.
+			if (handoff.planMsgId && handoff.tasksPath) {
+				const plan = this.session(sessionId)?.messages.find((m) => m.id === handoff!.planMsgId)?.plan;
+				if (plan) {
+					const done = new Set<number>();
+					plan.steps.forEach((st, i) => { if (st.done) { done.add(i + 1); } });
+					try {
+						const cur = fs.readFileSync(handoff.tasksPath, 'utf8');
+						fs.writeFileSync(handoff.tasksPath, checkOffTasks(cur, done), 'utf8');
+						trace(`spec tasks checked off: ${done.size}/${plan.steps.length}`);
+					} catch { /* best effort */ }
+				}
+			}
+		}
+	}
+
+	/** "consolidate": refresh the latest spec's tasks.md against reality. */
+	private async specConsolidate(
+		sessionId: string,
+		root: string,
+		gen: (system: string, user: string) => Promise<string>
+	): Promise<void> {
+		const specsRoot = path.join(root, '.openova', 'specs');
+		let dirs: { dir: string; mtime: number }[] = [];
+		try {
+			dirs = fs.readdirSync(specsRoot)
+				.map((d) => path.join(specsRoot, d))
+				.filter((d) => fs.statSync(d).isDirectory())
+				.map((d) => ({ dir: d, mtime: fs.statSync(d).mtimeMs }));
+		} catch { /* none */ }
+		if (!dirs.length) {
+			this.specNote(sessionId, 'No specs found under `.openova/specs/` to consolidate.');
+			return;
+		}
+		const latest = dirs.sort((a, b) => b.mtime - a.mtime)[0].dir;
+		const read = (n: string): string => {
+			try { return fs.readFileSync(path.join(latest, n), 'utf8'); } catch { return ''; }
+		};
+		const tasksDoc = read('tasks.md');
+		if (!tasksDoc) {
+			this.specNote(sessionId, `\`${path.basename(latest)}\` has no tasks.md to consolidate.`);
+			return;
+		}
+		const uris = await vscode.workspace.findFiles('**/*', '{**/node_modules/**,**/.git/**,**/.openova/**}', 300);
+		const fileList = uris.map((u) => path.relative(root, u.fsPath).replace(/\\/g, '/')).sort().join('\n');
+		const updated = await gen(
+			'You reconcile a task checklist with the current state of a workspace. Reply with ONLY the updated tasks.md content: ' +
+			'keep every line as-is except the checkboxes — mark [x] for tasks whose described files/changes clearly exist in the file list, [ ] otherwise. ' +
+			'Never add, remove, or rewrite tasks.',
+			`tasks.md:\n${tasksDoc}\n\nWorkspace files:\n${fileList}`
+		);
+		if (updated && /\[[ xX]?\]/.test(updated)) {
+			fs.writeFileSync(path.join(latest, 'tasks.md'), updated.endsWith('\n') ? updated : updated + '\n', 'utf8');
+			const doneCount = (updated.match(/\[[xX]\]/g) ?? []).length;
+			trace(`spec consolidate: ${path.basename(latest)} done=${doneCount}`);
+			this.specNote(sessionId, `Consolidated \`${path.basename(latest)}\`: tasks.md now shows ${doneCount} task(s) complete based on the current workspace.`);
+		} else {
+			this.specNote(sessionId, 'Consolidation produced no usable checklist — tasks.md left untouched.');
+		}
+	}
+
 	/** Approve & Run: execute the plan as an agent task with step check-off. */
 	private async approvePlan(sessionId: string, msgId: string): Promise<void> {
 		const sess = this.session(sessionId);
@@ -1841,7 +2088,9 @@ class OpenovaChatViewProvider implements vscode.WebviewViewProvider {
 			});
 			if (planRef) { this.writePlanFile(planRef); }
 		};
-		tools.proposePlan = (planTitle, stepTexts) =>
+		// A run that already carries an approved plan (plan mode / spec mode)
+		// must not propose a second one — check off the existing steps instead.
+		tools.proposePlan = opts.plan ? undefined : (planTitle, stepTexts) =>
 			new Promise<string[] | null>((resolve) => {
 				// Headless harness: auto-approve so runs never hang.
 				if (isDevRunActive()) {

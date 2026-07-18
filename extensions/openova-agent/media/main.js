@@ -263,7 +263,7 @@
 
 		const mode = document.createElement('select');
 		mode.className = 'mode';
-		for (const [v, label] of [['agent', 'Agent'], ['ask', 'Ask'], ['plan', 'Plan']]) {
+		for (const [v, label] of [['agent', 'Agent'], ['ask', 'Ask'], ['plan', 'Plan'], ['spec', 'Spec']]) {
 			const o = document.createElement('option');
 			o.value = v;
 			o.textContent = label;
