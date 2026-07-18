@@ -36,7 +36,7 @@ function readSafe(p: string): string {
 }
 
 /** Minimal YAML-ish frontmatter parser: leading --- block of key: value lines. */
-function parseFrontmatter(text: string): { meta: Record<string, string>; body: string } {
+export function parseFrontmatter(text: string): { meta: Record<string, string>; body: string } {
 	const m = /^---\r?\n([\s\S]*?)\r?\n---\r?\n?/.exec(text);
 	if (!m) { return { meta: {}, body: text }; }
 	const meta: Record<string, string> = {};

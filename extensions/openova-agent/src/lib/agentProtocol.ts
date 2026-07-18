@@ -71,7 +71,10 @@ function buildAction(tool: string, attrs: string, body: string): Action {
 		args.cmd = readAttr(attrs, 'cmd') ?? inner;
 		args.background = readAttr(attrs, 'background') ?? '';
 	} else if (tool === 'update_plan') {args.step = readAttr(attrs, 'step') ?? inner;}
-	else if (tool === 'subagent') {args.task = readAttr(attrs, 'task') ?? inner;}
+	else if (tool === 'subagent') {
+		args.task = readAttr(attrs, 'task') ?? inner;
+		args.type = readAttr(attrs, 'type') ?? '';
+	}
 	else if (tool === 'screenshot')
 		{args.target = readAttr(attrs, 'url') ?? readAttr(attrs, 'target') ?? inner;}
 	else if (tool === 'mcp_call') {
@@ -95,7 +98,8 @@ function buildAction(tool: string, attrs: string, body: string): Action {
 			.filter(Boolean)
 			.slice(0, 12);
 	} else if (tool === 'remember') {args.fact = inner;}
-	else if (tool === 'use_skill') {args.name = readAttr(attrs, 'name') ?? inner;}
+	// NOTE: the tag's own name attr is taken — the skill goes in `skill` or body.
+	else if (tool === 'use_skill') {args.name = readAttr(attrs, 'skill') ?? inner;}
 	else if (tool === 'finish') {args.summary = summary ?? (inner || 'Done.');}
 	return { tool, args };
 }

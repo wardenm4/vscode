@@ -20,6 +20,7 @@ import { ensureMcp, callMcp, disposeMcp } from './mcp';
 import { initKeys, getApiKey, setApiKey, hasApiKey } from './keys';
 import { setDevRunActive, isDevRunActive } from './devMode';
 import { collectRules, appendMemory } from './rules';
+import { discoverSkills, loadSkill, discoverSubagents, runHooks, hasHooks, listHooks } from './extensibility';
 import * as cp from 'child_process';
 import * as os from 'os';
 import * as path from 'path';
@@ -160,6 +161,11 @@ export function activate(context: vscode.ExtensionContext): void {
 	const automationTimer = setInterval(() => void provider.tickAutomations(), 60_000);
 	context.subscriptions.push({ dispose: () => clearInterval(automationTimer) });
 	context.subscriptions.push({ dispose: () => provider.killTerm() });
+	// SessionStart lifecycle hook (fire-and-forget).
+	const hookRoot = vscode.workspace.workspaceFolders?.[0]?.uri.fsPath;
+	if (hookRoot && hasHooks(hookRoot)) {
+		void runHooks(hookRoot, 'SessionStart', {});
+	}
 	context.subscriptions.push(
 		vscode.window.registerWebviewViewProvider('openova.chat', provider, {
 			webviewOptions: { retainContextWhenHidden: true }
@@ -750,6 +756,16 @@ class OpenovaChatViewProvider implements vscode.WebviewViewProvider {
 	): Promise<void> {
 		let contextBlock = '';
 		const root = vscode.workspace.workspaceFolders?.[0]?.uri;
+		// UserPromptSubmit hook: deterministic pre-processing; stdout becomes
+		// extra context for the turn (Claude Code semantics).
+		if (root && hasHooks(root.fsPath)) {
+			try {
+				const hr = await runHooks(root.fsPath, 'UserPromptSubmit', { OPENOVA_PROMPT: text.slice(0, 4000) });
+				if (hr.output) { contextBlock += `\n\n[Hook context]\n${hr.output}`; }
+			} catch {
+				/* hooks are best-effort */
+			}
+		}
 		if (root && contextPaths.length) {
 			for (const rel of contextPaths.slice(0, 8)) {
 				try {
@@ -1139,12 +1155,20 @@ class OpenovaChatViewProvider implements vscode.WebviewViewProvider {
 			case 'listRules': {
 				const root = vscode.workspace.workspaceFolders?.[0]?.uri.fsPath;
 				let rules: unknown[] = [];
+				let skills: unknown[] = [];
+				let subagents: unknown[] = [];
+				let hooks: unknown[] = [];
 				try {
-					rules = root ? collectRules(root, []).rules : [];
+					if (root) {
+						rules = collectRules(root, []).rules;
+						skills = discoverSkills(root).map((s) => ({ name: s.name, description: s.description, source: s.source }));
+						subagents = discoverSubagents(root).map((s) => ({ name: s.name, description: s.description, model: s.model }));
+						hooks = listHooks(root);
+					}
 				} catch {
-					/* unreadable rules dir */
+					/* unreadable config dirs */
 				}
-				this.post({ type: 'rules', rules });
+				this.post({ type: 'rules', rules, skills, subagents, hooks });
 				break;
 			}
 			case 'applyTheme': {
@@ -1330,6 +1354,10 @@ class OpenovaChatViewProvider implements vscode.WebviewViewProvider {
 		this.persist();
 		this.postSessions();
 		this.post({ type: 'running', sessionId, running: false });
+		const hookRoot = vscode.workspace.workspaceFolders?.[0]?.uri.fsPath;
+		if (hookRoot && hasHooks(hookRoot)) {
+			void runHooks(hookRoot, 'Stop', { OPENOVA_SESSION: sessionId });
+		}
 		if (wasFirstTurn) { this.autoTitle(sessionId); }
 		// Dispatch the next queued follow-up, skipping items that would
 		// early-return (which would silently stall the rest of the queue).
@@ -1583,6 +1611,27 @@ class OpenovaChatViewProvider implements vscode.WebviewViewProvider {
 			trace(`remember: ${fact.slice(0, 80)}`);
 			return rel;
 		};
+		tools.useSkill = async (name) => {
+			trace(`use_skill: ${name}`);
+			return loadSkill(root!, name);
+		};
+		tools.getSubagent = (type) => {
+			const def = discoverSubagents(root!).find((d) => d.name.toLowerCase() === type.toLowerCase());
+			return def ? { prompt: def.prompt, model: def.model, tools: def.tools } : null;
+		};
+		if (hasHooks(root!)) {
+			tools.preToolHook = async (tool, args) => {
+				const r = await runHooks(root!, 'PreToolUse', {
+					OPENOVA_TOOL: tool,
+					OPENOVA_ARGS: JSON.stringify(args).slice(0, 4000)
+				});
+				if (r.blocked) { trace(`hook blocked ${tool}: ${r.blocked.slice(0, 100)}`); }
+				return r.blocked;
+			};
+			tools.postToolHook = (tool, ok) => {
+				void runHooks(root!, 'PostToolUse', { OPENOVA_TOOL: tool, OPENOVA_TOOL_OK: String(ok) });
+			};
+		}
 		tools.askUser = (question, options) =>
 			new Promise<string>((resolve) => {
 				// Headless harness: pick the first option so runs never hang.
@@ -1712,6 +1761,22 @@ class OpenovaChatViewProvider implements vscode.WebviewViewProvider {
 		let projectRules = '';
 		try {
 			projectRules = root ? collectRules(root, ruleContext).inject : '';
+			if (root) {
+				// Progressive disclosure: only names + one-line descriptions here;
+				// bodies load on demand via use_skill / subagent type.
+				const skills = discoverSkills(root);
+				if (skills.length) {
+					projectRules +=
+						'\n\n## Available skills (load with use_skill BEFORE doing work they cover)\n' +
+						skills.map((s) => `- ${s.name} — ${s.description}`).join('\n');
+				}
+				const subs = discoverSubagents(root);
+				if (subs.length) {
+					projectRules +=
+						'\n\n## Available subagent types (use <tool name="subagent" type="NAME">)\n' +
+						subs.map((s) => `- ${s.name} — ${s.description}`).join('\n');
+				}
+			}
 		} catch (e) {
 			trace(`rules error ${e instanceof Error ? e.message : String(e)}`);
 		}

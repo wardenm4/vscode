@@ -37,6 +37,9 @@
 	let activityTimer = null;
 	let repoMenuOpen = false;
 	let projectRules = null;
+	let projectSkills = [];
+	let projectSubagents = [];
+	let projectHooks = [];
 	// transcript scroll: stick to bottom unless the user scrolled up
 	let stickToBottom = true;
 	let savedScrollTop = 0;
@@ -975,6 +978,60 @@
 			}
 			col.appendChild(list);
 		}
+
+		// ---- Skills / Subagents / Hooks ----
+		const extSection = (title, sub, items, renderItem) => {
+			col.appendChild(el('div', 'autom-title custz-sect', title));
+			col.appendChild(el('div', 'autom-sub', sub));
+			if (!items.length) {
+				col.appendChild(el('div', 'rail-empty', 'None defined yet.'));
+				return;
+			}
+			const list = el('div', 'rules-list');
+			for (const it of items) { list.appendChild(renderItem(it)); }
+			col.appendChild(list);
+		};
+		extSection(
+			'Skills',
+			'SKILL.md folders in .openova/skills (or ~/.openova/skills). Loaded on demand when the agent matches their description.',
+			projectSkills,
+			(s) => {
+				const row = el('div', 'rule-row');
+				row.appendChild(el('span', 'rule-badge openova', s.source || 'skill'));
+				const meta = el('div', 'autom-meta');
+				meta.appendChild(el('div', 'autom-name', s.name));
+				meta.appendChild(el('div', 'autom-when', s.description));
+				row.appendChild(meta);
+				return row;
+			}
+		);
+		extSection(
+			'Subagents',
+			'.openova/agents/*.md — named agent types with their own prompt, optional model and tool allowlist.',
+			projectSubagents,
+			(s) => {
+				const row = el('div', 'rule-row');
+				row.appendChild(el('span', 'rule-badge openova', s.model || 'inherit'));
+				const meta = el('div', 'autom-meta');
+				meta.appendChild(el('div', 'autom-name', s.name));
+				meta.appendChild(el('div', 'autom-when', s.description));
+				row.appendChild(meta);
+				return row;
+			}
+		);
+		extSection(
+			'Hooks',
+			'.openova/hooks.json — shell commands at lifecycle events. A non-zero PreToolUse exit blocks the tool.',
+			projectHooks,
+			(h) => {
+				const row = el('div', 'rule-row');
+				row.appendChild(el('span', 'rule-badge', h.event));
+				const meta = el('div', 'autom-meta');
+				meta.appendChild(el('div', 'autom-name mono', h.command));
+				row.appendChild(meta);
+				return row;
+			}
+		);
 		pane.appendChild(col);
 		main.appendChild(pane);
 	}
@@ -1728,6 +1785,9 @@
 				break;
 			case 'rules':
 				projectRules = m.rules || [];
+				projectSkills = m.skills || [];
+				projectSubagents = m.subagents || [];
+				projectHooks = m.hooks || [];
 				render();
 				break;
 			case 'sessions':

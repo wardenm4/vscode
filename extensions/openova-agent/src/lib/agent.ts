@@ -49,6 +49,12 @@ export interface AgentTools {
 	remember?: (fact: string) => Promise<string>;
 	/** Load a skill body by name (progressive disclosure). */
 	useSkill?: (name: string) => Promise<string>;
+	/** Deterministic PreToolUse hook: return a reason string to BLOCK the tool. */
+	preToolHook?: (tool: string, args: Record<string, unknown>) => Promise<string | null>;
+	/** Fire-and-forget PostToolUse hook. */
+	postToolHook?: (tool: string, ok: boolean) => void;
+	/** Look up a named subagent definition (prompt / model / tool allowlist). */
+	getSubagent?: (type: string) => { prompt: string; model?: string; tools: string[] } | null;
 }
 
 export interface AgentConfig {
@@ -115,7 +121,13 @@ FULL contents of the file, exactly as they should be saved to disk.
 <tool name="subagent">a complete, self-contained subtask description</tool>
     Delegate a focused subtask (e.g. "write unit tests for src/utils.js") to a
     fresh subagent with its own context window. Use it to keep big tasks
-    manageable; you get back a summary of what it did.
+    manageable; you get back a summary of what it did. If the project defines
+    named subagent types (listed under Project context), select one with a
+    type attribute: <tool name="subagent" type="reviewer">task</tool>
+<tool name="use_skill" skill="skill-name"></tool>
+    Load a project skill's full instructions (skills are listed under Project
+    context with one-line descriptions). Load a skill BEFORE doing work it
+    covers, then follow it.
 <tool name="screenshot">http://localhost:5173 or relative/page.html</tool>
     Capture a screenshot of a URL or HTML file you built, to visually verify
     UI work. The image is attached to the conversation for the user to review.
@@ -329,6 +341,16 @@ export async function runAgent(
 
 		let observation = '';
 		let toolFailed = false;
+		// Deterministic PreToolUse hook — a non-zero exit blocks the tool.
+		if (tools.preToolHook && action.tool !== 'finish') {
+			const blocked = await tools.preToolHook(action.tool, action.args);
+			if (blocked) {
+				const obs = `Blocked by a project hook: ${blocked}`;
+				cb.onObservation(obs, true);
+				transcript.push({ role: 'user', content: `Result:\n${obs}` });
+				continue;
+			}
+		}
 		try {
 			switch (action.tool) {
 				case 'list_files': {
@@ -432,6 +454,24 @@ export async function runAgent(
 						toolFailed = true;
 						break;
 					}
+					// Named subagent types: their own prompt, model, and tool allowlist.
+					const subType = String(action.args.type ?? '').trim();
+					const def = subType && tools.getSubagent ? tools.getSubagent(subType) : null;
+					if (subType && !def) {
+						observation = `Unknown subagent type "${subType}" — omit type or use a defined one.`;
+						toolFailed = true;
+						break;
+					}
+					const subConfig: AgentConfig = def
+						? {
+							...config,
+							model: def.model ?? config.model,
+							extraRules: [config.extraRules, `# Subagent role: ${subType}\n${def.prompt}`]
+								.filter(Boolean)
+								.join('\n\n')
+						}
+						: config;
+					const subTools: AgentTools = def && def.tools.length ? restrictTools(tools, def.tools) : tools;
 					// Run a nested agent with a FRESH transcript (isolated context); only
 					// its action trace + finish summary flow back to this conversation.
 					const trace: string[] = [];
@@ -439,8 +479,8 @@ export async function runAgent(
 					let failed = false;
 					await runAgent(
 						subtask,
-						tools,
-						config,
+						subTools,
+						subConfig,
 						{
 							onThought: () => { },
 							onAction: (name, a) =>
@@ -639,6 +679,25 @@ export async function runAgent(
 		}
 
 		cb.onObservation(observation, toolFailed);
+		tools.postToolHook?.(action.tool, !toolFailed);
 		transcript.push({ role: 'user', content: `Result:\n${observation}` });
 	}
+}
+
+/** Copy of the tool surface with everything outside `allowed` disabled. */
+function restrictTools(tools: AgentTools, allowed: string[]): AgentTools {
+	const allow = new Set(allowed);
+	const deny = (name: string) => async (): Promise<never> => {
+		throw new Error(`Tool ${name} is not allowed for this subagent type.`);
+	};
+	const t: AgentTools = { ...tools };
+	if (!allow.has('list_files')) { t.listFiles = deny('list_files') as AgentTools['listFiles']; }
+	if (!allow.has('read_file')) { t.readFile = deny('read_file') as AgentTools['readFile']; }
+	if (!allow.has('search')) { t.search = deny('search') as AgentTools['search']; }
+	if (!allow.has('codebase_search')) { t.codebaseSearch = deny('codebase_search') as AgentTools['codebaseSearch']; }
+	if (!allow.has('write_file')) { t.writeFile = deny('write_file') as AgentTools['writeFile']; }
+	if (!allow.has('run_command')) { t.runCommand = deny('run_command') as AgentTools['runCommand']; }
+	if (!allow.has('mcp_call')) { t.callMcp = undefined; }
+	if (!allow.has('screenshot')) { t.screenshot = undefined; }
+	return t;
 }
