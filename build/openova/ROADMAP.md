@@ -3,9 +3,14 @@
 > **Status (2026-07-18): ALL 7 PHASES IMPLEMENTED** and verified per-phase
 > (unit + dev-harness e2e), commits 39c3ac79 (P1), 6ec5bc7c (P2), c54ab2e2
 > (P3), 225dcf83 (P4), c2915146 (P5), a61ec895 (P6), af3e7bb8 (P7) on
-> `openova-base`. Known deferred items: browser click-interaction (needs a
-> CDP client; snapshot/screenshot/open shipped), embeddings codebase index
-> (codebase_search still returns empty), git worktrees / best-of-N parallel
+> `openova-base`.
+>
+> **Deferred items CLEARED same day:** BM25 codebase index (880fb54d —
+> codebase_search returns ranked chunks), interactive CDP browser
+> (277d08fe — browser_click / browser_type / live snapshot over a
+> hand-rolled DevTools WebSocket), git worktree runs (ca137131 —
+> openova.newWorktree + repo-menu entry). Still open by choice: embeddings
+> upgrade for the index (BM25 is the shipped baseline), best-of-N parallel
 > runs, optional Design Mode.
 
 Goal: an open-source, highly customizable Cursor replacement. Agent parity with
