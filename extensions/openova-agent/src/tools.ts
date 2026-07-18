@@ -13,6 +13,7 @@ import * as cp from 'child_process';
 import type { AgentTools } from './lib/agent';
 import { classifyCommand } from './lib/commandGate';
 import { isDevRunActive } from './devMode';
+import { searchCodebase } from './codebaseIndex';
 
 const EXCLUDE = '{**/node_modules/**,**/.git/**,**/out/**,**/dist/**,**/build/**,**/.openova/**}';
 
@@ -274,10 +275,11 @@ export function createTools(host: ToolHost): AgentTools {
 			return results;
 		},
 
-		codebaseSearch: async () => {
-			// Semantic indexing hasn't been ported yet — the agent falls back to
-			// exact search / reading files when this returns nothing.
-			return [];
+		codebaseSearch: async (query) => {
+			// BM25 over chunked workspace files (cached with a short TTL). Runs
+			// off the event loop's hot path is unnecessary — indexing 1200 files
+			// takes well under a second and only happens once a minute.
+			return searchCodebase(host.root, query);
 		},
 
 		writeFile: async (rel, content) => {
