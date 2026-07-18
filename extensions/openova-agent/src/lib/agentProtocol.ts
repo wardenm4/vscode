@@ -27,6 +27,8 @@ export const TOOL_NAMES = [
 	'screenshot',
 	'ask_user',
 	'propose_plan',
+	'remember',
+	'use_skill',
 	'finish'
 ];
 
@@ -92,7 +94,9 @@ function buildAction(tool: string, attrs: string, body: string): Action {
 			.map((l) => l.replace(/^\s*(?:\d+[.)]\s*|[-*]\s*)/, '').trim())
 			.filter(Boolean)
 			.slice(0, 12);
-	} else if (tool === 'finish') {args.summary = summary ?? (inner || 'Done.');}
+	} else if (tool === 'remember') {args.fact = inner;}
+	else if (tool === 'use_skill') {args.name = readAttr(attrs, 'name') ?? inner;}
+	else if (tool === 'finish') {args.summary = summary ?? (inner || 'Done.');}
 	return { tool, args };
 }
 

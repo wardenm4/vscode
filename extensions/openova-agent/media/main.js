@@ -36,6 +36,7 @@
 	let runStartLocal = 0;
 	let activityTimer = null;
 	let repoMenuOpen = false;
+	let projectRules = null;
 	// transcript scroll: stick to bottom unless the user scrolled up
 	let stickToBottom = true;
 	let savedScrollTop = 0;
@@ -930,6 +931,50 @@
 		const browse = el('button', 'theme-browse', 'Browse all installed themes…');
 		browse.onclick = () => vscode.postMessage({ type: 'browseThemes' });
 		col.appendChild(browse);
+
+		// ---- Rules & context ----
+		col.appendChild(el('div', 'autom-title custz-sect', 'Rules & context'));
+		col.appendChild(
+			el(
+				'div',
+				'autom-sub',
+				'Project instructions the agent loads every run. Reads AGENTS.md, .openova/rules, .cursor/rules and .kiro/steering — drop files from other tools in as-is.'
+			)
+		);
+		if (projectRules === null) {
+			vscode.postMessage({ type: 'listRules' });
+			col.appendChild(el('div', 'rail-empty', 'Loading…'));
+		} else if (!projectRules.length) {
+			const none = el('div', 'rules-empty');
+			none.appendChild(el('div', '', 'No rules yet.'));
+			none.appendChild(
+				el('div', 'tool-empty-sub', 'Create AGENTS.md in the repo root, or add .openova/rules/*.md with a description and optional globs.')
+			);
+			col.appendChild(none);
+		} else {
+			const list = el('div', 'rules-list');
+			for (const r of projectRules) {
+				const row = el('div', 'rule-row');
+				const badge = el('span', 'rule-badge ' + r.source, r.source);
+				row.appendChild(badge);
+				const meta = el('div', 'autom-meta');
+				const name = el('div', 'autom-name', r.relPath);
+				meta.appendChild(name);
+				meta.appendChild(
+					el(
+						'div',
+						'autom-when',
+						r.mode === 'always' ? 'Always applied' : r.mode === 'glob' ? 'Applied for: ' + (r.globs || []).join(', ') : 'Listed for the agent (loaded on demand)'
+					)
+				);
+				row.appendChild(meta);
+				const open = el('button', 'autom-run', 'Open');
+				open.onclick = () => vscode.postMessage({ type: 'openInEditor', path: r.relPath });
+				row.appendChild(open);
+				list.appendChild(row);
+			}
+			col.appendChild(list);
+		}
 		pane.appendChild(col);
 		main.appendChild(pane);
 	}
@@ -1663,6 +1708,10 @@
 			case 'repos':
 				repos = m.repos || [];
 				repoCurrent = m.repoCurrent || null;
+				render();
+				break;
+			case 'rules':
+				projectRules = m.rules || [];
 				render();
 				break;
 			case 'sessions':

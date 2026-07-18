@@ -45,6 +45,10 @@ export interface AgentTools {
 	 * user cancelled the plan.
 	 */
 	proposePlan?: (title: string, steps: string[]) => Promise<string[] | null>;
+	/** Persist a durable fact to project memory; resolves with the file path. */
+	remember?: (fact: string) => Promise<string>;
+	/** Load a skill body by name (progressive disclosure). */
+	useSkill?: (name: string) => Promise<string>;
 }
 
 export interface AgentConfig {
@@ -130,6 +134,10 @@ B — Next.js + cloud database. Sync across devices, more setup.
 </tool>
     Present your implementation plan as a checklist and WAIT for the user to
     approve (they can edit the steps). The result is the final step list.
+<tool name="remember">one durable fact worth keeping across sessions</tool>
+    Save a fact to project memory (.openova/memory.md) — user preferences,
+    project conventions, decisions. Use when the user says "remember" or you
+    learn something future sessions need. Never store secrets.
 <tool name="finish">your answer or a short summary of what you built (markdown ok)</tool>
     Call this when the task is complete — or IMMEDIATELY when the user is
     just asking a question: put the full answer in the body. For build tasks
@@ -549,6 +557,37 @@ export async function runAgent(
 							approved.map((s, idx) => `${idx + 1}. ${s}`).join('\n') +
 							'\nImplement them in order, calling update_plan after each.';
 					}
+					break;
+				}
+			case 'remember': {
+					const fact = String(action.args.fact ?? '').trim();
+					if (!fact) {
+						observation = 'Error: remember needs the fact in the tool body.';
+						toolFailed = true;
+						break;
+					}
+					if (!tools.remember) {
+						observation = 'Memory is not available here.';
+						toolFailed = true;
+						break;
+					}
+					const where = await tools.remember(fact);
+					observation = `Remembered (saved to ${where}).`;
+					break;
+				}
+			case 'use_skill': {
+					const skillName = String(action.args.name ?? '').trim();
+					if (!tools.useSkill) {
+						observation = 'Skills are not available here.';
+						toolFailed = true;
+						break;
+					}
+					if (!skillName) {
+						observation = 'Error: use_skill needs a name attribute.';
+						toolFailed = true;
+						break;
+					}
+					observation = await tools.useSkill(skillName);
 					break;
 				}
 			case 'update_plan': {

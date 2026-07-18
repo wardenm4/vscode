@@ -19,6 +19,7 @@ import { createTools, createCheck, ToolHost } from './tools';
 import { ensureMcp, callMcp, disposeMcp } from './mcp';
 import { initKeys, getApiKey, setApiKey, hasApiKey } from './keys';
 import { setDevRunActive, isDevRunActive } from './devMode';
+import { collectRules, appendMemory } from './rules';
 import * as cp from 'child_process';
 import * as os from 'os';
 import * as path from 'path';
@@ -760,7 +761,12 @@ class OpenovaChatViewProvider implements vscode.WebviewViewProvider {
 			}
 		}
 		const full = contextBlock ? `${text}${contextBlock}` : text;
-		if (mode === 'agent') { await this.sendAgent(sessionId, full, contextBlock ? { displayText: text } : {}); }
+		if (mode === 'agent') {
+			await this.sendAgent(sessionId, full, {
+				...(contextBlock ? { displayText: text } : {}),
+				contextPaths
+			});
+		}
 		else if (mode === 'plan') { await this.sendPlan(sessionId, full, text); }
 		else { await this.sendAsk(sessionId, full, text); }
 	}
@@ -1128,6 +1134,17 @@ class OpenovaChatViewProvider implements vscode.WebviewViewProvider {
 				await this.onMessage({ type: 'listModels', provider: p });
 				break;
 			}
+			case 'listRules': {
+				const root = vscode.workspace.workspaceFolders?.[0]?.uri.fsPath;
+				let rules: unknown[] = [];
+				try {
+					rules = root ? collectRules(root, []).rules : [];
+				} catch {
+					/* unreadable rules dir */
+				}
+				this.post({ type: 'rules', rules });
+				break;
+			}
 			case 'applyTheme': {
 				const name = String(msg.name ?? '');
 				if (name) {
@@ -1488,7 +1505,7 @@ class OpenovaChatViewProvider implements vscode.WebviewViewProvider {
 	private async sendAgent(
 		sessionId: string,
 		text: string,
-		opts: { displayText?: string; plan?: { sessionId: string; msgId: string } } = {}
+		opts: { displayText?: string; plan?: { sessionId: string; msgId: string }; contextPaths?: string[] } = {}
 	): Promise<void> {
 		const root = vscode.workspace.workspaceFolders?.[0]?.uri.fsPath;
 		trace(`sendAgent root=${root ?? 'NONE'} model=${this.settings().model}`);
@@ -1559,6 +1576,11 @@ class OpenovaChatViewProvider implements vscode.WebviewViewProvider {
 		};
 		const tools = createTools(host);
 		tools.check = createCheck(host);
+		tools.remember = async (fact) => {
+			const rel = appendMemory(root!, fact);
+			trace(`remember: ${fact.slice(0, 80)}`);
+			return rel;
+		};
 		tools.askUser = (question, options) =>
 			new Promise<string>((resolve) => {
 				// Headless harness: pick the first option so runs never hang.
@@ -1680,6 +1702,18 @@ class OpenovaChatViewProvider implements vscode.WebviewViewProvider {
 			`Environment:\n- Workspace root (absolute): ${root}\n- OS: ${process.platform === 'win32' ? 'Windows' : process.platform}\n` +
 			`- All relative paths are under the workspace root. When the user asks where something is, give the full absolute path.`;
 
+		// Persistent project context: AGENTS.md, rules, steering, memory.
+		const activeEditorRel = vscode.window.activeTextEditor
+			? vscode.workspace.asRelativePath(vscode.window.activeTextEditor.document.uri, false)
+			: undefined;
+		const ruleContext = [...(opts.contextPaths ?? []), ...(activeEditorRel ? [activeEditorRel] : [])];
+		let projectRules = '';
+		try {
+			projectRules = root ? collectRules(root, ruleContext).inject : '';
+		} catch (e) {
+			trace(`rules error ${e instanceof Error ? e.message : String(e)}`);
+		}
+
 		// Conversation continuity: recent turns (user text + assistant summaries)
 		// so follow-ups like "is it done?" don't start from amnesia.
 		const priorTurns = sess.messages
@@ -1687,7 +1721,7 @@ class OpenovaChatViewProvider implements vscode.WebviewViewProvider {
 			.slice(-6)
 			.map((m) => `${m.role === 'user' ? 'User' : 'You'}: ${m.content.slice(0, 500)}`);
 		const taskWithContext = priorTurns.length
-			? `Conversation so far:\n${priorTurns.join('\n')}\n\n---\nCurrent request: ${text}`
+			? `Earlier conversation (REFERENCE ONLY — that work is already done, never redo it):\n${priorTurns.join('\n')}\n\n---\nThe user's CURRENT request (respond to THIS): ${text}`
 			: text;
 
 		try {
@@ -1700,7 +1734,7 @@ class OpenovaChatViewProvider implements vscode.WebviewViewProvider {
 					apiKey: await getApiKey(s.provider),
 					model: s.model,
 					maxTokens: 8192,
-					extraRules: [envRules, mcpRules].filter(Boolean).join('\n\n') || undefined
+					extraRules: [envRules, projectRules, mcpRules].filter(Boolean).join('\n\n') || undefined
 				},
 				{
 					onThought: (t) => addStep({ id: uid(), kind: 'thought', title: t, status: 'done' }),

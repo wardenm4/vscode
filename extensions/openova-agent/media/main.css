@@ -2027,6 +2027,53 @@ select option {
 	background: var(--vscode-list-hoverBackground);
 }
 
+/* rules & context list (Customize pane) */
+.custz-sect {
+	margin-top: 28px;
+}
+.rules-list {
+	display: flex;
+	flex-direction: column;
+	gap: 6px;
+}
+.rule-row {
+	display: flex;
+	align-items: center;
+	gap: 10px;
+	border: 1px solid var(--ov-hair);
+	border-radius: 10px;
+	padding: 8px 12px;
+	background: var(--ov-card);
+}
+.rule-badge {
+	font-family: var(--ov-mono);
+	font-size: 9px;
+	text-transform: uppercase;
+	letter-spacing: 0.6px;
+	border: 1px solid var(--ov-hair);
+	border-radius: 20px;
+	padding: 2px 8px;
+	color: var(--vscode-descriptionForeground);
+	flex-shrink: 0;
+}
+.rule-badge.openova {
+	color: var(--vscode-focusBorder);
+	border-color: color-mix(in srgb, var(--vscode-focusBorder) 50%, transparent);
+}
+.rule-badge.memory {
+	color: var(--ov-success);
+	border-color: color-mix(in srgb, var(--ov-success) 50%, transparent);
+}
+.rules-empty {
+	border: 1px dashed var(--ov-hair);
+	border-radius: 10px;
+	padding: 14px;
+	font-size: 12.5px;
+	display: flex;
+	flex-direction: column;
+	gap: 4px;
+}
+
 /* session header + centered transcript in window mode */
 .sess-head {
 	display: flex;
