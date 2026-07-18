@@ -89,6 +89,47 @@
         }
       ]
     },
+    "walkthroughs": [
+      {
+        "id": "openova.gettingStarted",
+        "title": "Get started with Openova",
+        "description": "Wire up a model, meet the agent, and make it yours — open source, any model, your rules.",
+        "steps": [
+          {
+            "id": "openova.pickModel",
+            "title": "Bring any model",
+            "description": "Hosted (Claude, GPT, Gemini, Groq, DeepSeek, Grok, ...) or fully local (LM Studio, Ollama, llama.cpp, vLLM).\n[Open the Agent](command:openova.focusChat)",
+            "media": {
+              "markdown": "media/walkthrough/models.md"
+            }
+          },
+          {
+            "id": "openova.modes",
+            "title": "Agent, Ask, Plan, Spec",
+            "description": "Autonomous runs with plans and check-off, plain chat, or Kiro-style spec-driven development.\n[Open the Agents Window](command:openova.openAgentsWindow)",
+            "media": {
+              "markdown": "media/walkthrough/modes.md"
+            }
+          },
+          {
+            "id": "openova.customize",
+            "title": "Rules, skills, hooks & memory",
+            "description": "AGENTS.md, .cursor rules, .kiro steering, SKILL.md skills, subagents-as-files, and lifecycle hooks — open formats, no lock-in.",
+            "media": {
+              "markdown": "media/walkthrough/customize.md"
+            }
+          },
+          {
+            "id": "openova.security",
+            "title": "Sandbox & approvals",
+            "description": "Independent sandbox and approval axes, protected paths, a network gate, diff review, and restorable checkpoints.",
+            "media": {
+              "markdown": "media/walkthrough/security.md"
+            }
+          }
+        ]
+      }
+    ],
     "configuration": {
       "title": "Openova",
       "properties": {
