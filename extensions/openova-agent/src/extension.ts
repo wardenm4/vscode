@@ -192,6 +192,50 @@ export function activate(context: vscode.ExtensionContext): void {
 		vscode.commands.registerCommand('openova.openAgentsWindow', () => {
 			void provider.openAgentsWindow();
 		}),
+		// Isolated agent runs: a git worktree gets its own folder + window, so
+		// an agent can work on a branch without touching the main checkout.
+		vscode.commands.registerCommand('openova.newWorktree', async () => {
+			const root = vscode.workspace.workspaceFolders?.[0]?.uri.fsPath;
+			if (!root) {
+				void vscode.window.showErrorMessage('Openova: open a folder to create a worktree.');
+				return;
+			}
+			const isRepo = await new Promise<boolean>((resolve) => {
+				cp.exec('git rev-parse --git-dir', { cwd: root }, (err) => resolve(!err));
+			});
+			if (!isRepo) {
+				void vscode.window.showErrorMessage('Openova: the current folder is not a git repository.');
+				return;
+			}
+			const defaultName = `agent-${new Date().toISOString().slice(0, 10)}-${Math.random().toString(36).slice(2, 6)}`;
+			const name = isDevRunActive()
+				? defaultName
+				: await vscode.window.showInputBox({
+					prompt: 'Worktree branch name (a sibling folder opens in a new window)',
+					value: defaultName,
+					validateInput: (v) => (/^[\w./-]+$/.test(v.trim()) ? undefined : 'Letters, digits, - _ . / only')
+				});
+			if (!name?.trim()) { return; }
+			const branch = name.trim();
+			const dest = path.join(path.dirname(root), `${path.basename(root)}-wt-${branch.replace(/[^\w.-]+/g, '-')}`);
+			const result = await new Promise<{ ok: boolean; out: string }>((resolve) => {
+				cp.exec(
+					`git worktree add -b "${branch}" "${dest}"`,
+					{ cwd: root, timeout: 30_000 },
+					(err, stdout, stderr) => resolve({ ok: !err, out: `${stdout}\n${stderr}`.trim() })
+				);
+			});
+			trace(`worktree: branch=${branch} dest=${dest} ok=${result.ok} ${result.out.slice(0, 120)}`);
+			if (!result.ok) {
+				void vscode.window.showErrorMessage(`Openova: git worktree failed — ${result.out.slice(0, 300)}`);
+				return;
+			}
+			void vscode.window.showInformationMessage(`Openova: worktree "${branch}" created at ${dest}.`);
+			// The harness must not spawn extra windows during verification.
+			if (!isDevRunActive()) {
+				await vscode.commands.executeCommand('vscode.openFolder', vscode.Uri.file(dest), { forceNewWindow: true });
+			}
+		}),
 		// Restores the Agents window (incl. its floating OS window) across restarts.
 		vscode.window.registerWebviewPanelSerializer('openova.agents', {
 			deserializeWebviewPanel: async (panel) => {
@@ -315,6 +359,7 @@ export function activate(context: vscode.ExtensionContext): void {
 						completion?: { file: string; line: number; col: number };
 						agentsWindow?: boolean;
 						showView?: string;
+						command?: string;
 						automation?: { name: string; prompt: string; everyMinutes?: number; run?: boolean };
 					};
 					fs.unlinkSync(triggerPath);
@@ -330,6 +375,11 @@ export function activate(context: vscode.ExtensionContext): void {
 							// deliver the view hint directly too
 							setTimeout(() => provider.postView(String(req.showView)), 1500);
 						}
+					}
+					if (req.command) {
+						await vscode.commands.executeCommand(req.command);
+						trace(`devCommand done: ${req.command}`);
+						return;
 					}
 					if (req.automation) {
 						provider.saveAutomation({
@@ -1005,6 +1055,9 @@ class OpenovaChatViewProvider implements vscode.WebviewViewProvider {
 				break;
 			case 'openRepo':
 				void vscode.commands.executeCommand('workbench.action.openRecent');
+				break;
+			case 'newWorktree':
+				await vscode.commands.executeCommand('openova.newWorktree');
 				break;
 			case 'pickFolder': {
 				const picked = await vscode.window.showOpenDialog({

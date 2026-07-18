@@ -60,6 +60,10 @@
       {
         "command": "openova.inlineEdit",
         "title": "Openova: Inline Edit Selection"
+      },
+      {
+        "command": "openova.newWorktree",
+        "title": "Openova: New Worktree (isolated agent run)"
       }
     ],
     "keybindings": [

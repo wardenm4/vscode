@@ -722,6 +722,8 @@
 			action('Open Folder…', { type: 'pickFolder' });
 			// allow-any-unicode-next-line
 			action('Open Recent…', { type: 'openRepo' });
+			// allow-any-unicode-next-line
+			action('New Worktree…', { type: 'newWorktree' });
 			repoWrap.appendChild(menu);
 		}
 		where.appendChild(repoWrap);
