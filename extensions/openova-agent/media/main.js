@@ -41,6 +41,7 @@
 	let projectSubagents = [];
 	let projectHooks = [];
 	// transcript scroll: stick to bottom unless the user scrolled up
+	let sessionSpend = 0;
 	let stickToBottom = true;
 	let savedScrollTop = 0;
 	// window-mode navigation
@@ -288,6 +289,10 @@
 			render();
 		};
 		bar.appendChild(model);
+		// Live session spend estimate (updates in place from 'usage' posts).
+		const spend = el('span', 'spend-meter', sessionSpend > 0 ? '~' + fmtUsd(sessionSpend) : '');
+		spend.title = 'Estimated session spend (tokens ~ chars/4, list prices)';
+		bar.appendChild(spend);
 		bar.appendChild(el('span', 'spacer'));
 
 		const send = el('button', 'send' + (running ? ' stop' : ''));
@@ -1476,6 +1481,16 @@
 		return Math.floor(s / 60) + 'm ' + (s % 60) + 's';
 	}
 
+	// Compact token / cost formatting for the usage meter (12.3k tok · $0.04).
+	function fmtTokens(n) {
+		if (!n) { return ''; }
+		return (n >= 1000 ? (n / 1000).toFixed(1) + 'k' : String(n)) + ' tok';
+	}
+	function fmtUsd(usd) {
+		if (!usd || usd <= 0) { return '$0.00'; }
+		return usd < 0.01 ? '$' + usd.toFixed(4) : '$' + usd.toFixed(2);
+	}
+
 	// Compact per-step duration for the mono right column (0.2s / 12s / 1m3s).
 	function fmtMs(ms) {
 		if (typeof ms !== 'number') { return ''; }
@@ -1506,6 +1521,9 @@
 			const head = el('button', 'work-head');
 			const dur = fmtDuration(m.durationMs);
 			head.appendChild(el('span', '', dur ? 'Worked for ' + dur : 'Worked'));
+			if (m.usage && m.usage.tokens) {
+				head.appendChild(el('span', 'work-usage', fmtTokens(m.usage.tokens) + (m.usage.cost > 0 ? ' · ' + fmtUsd(m.usage.cost) : '')));
+			}
 			const chev = el('span', 'work-chev' + (expanded ? ' open' : ''));
 			chev.appendChild(icon(ICONS.chevron, 11));
 			head.appendChild(chev);
@@ -1823,6 +1841,19 @@
 				currentTheme = m.current || '';
 				render();
 				break;
+			case 'usage': {
+				// Live cost meter: update the message's usage in place (cheap)
+				// and repaint only when the run row is already rendered.
+				const us = sessions.find((x) => x.id === m.sessionId);
+				const um = us && us.messages.find((x) => x.id === m.msgId);
+				if (um) { um.usage = { tokens: m.tokens, cost: m.cost }; }
+				sessionSpend = m.sessionCost || 0;
+				const meter = document.querySelector('.spend-meter');
+				if (meter) {
+					meter.textContent = sessionSpend > 0 ? '~' + fmtUsd(sessionSpend) : '';
+				}
+				break;
+			}
 			case 'openBrowser':
 				// Agent-driven: surface the browser pane at the requested URL.
 				if (isWindow) {

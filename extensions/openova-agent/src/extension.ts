@@ -22,6 +22,8 @@ import { setDevRunActive, isDevRunActive } from './devMode';
 import { collectRules, appendMemory } from './rules';
 import { discoverSkills, loadSkill, discoverSubagents, runHooks, hasHooks, listHooks } from './extensibility';
 import { browserScreenshot, browserSnapshot, resolveTarget } from './browser';
+import { parseRouteSpec, type Route } from './lib/router';
+import { estTokens, estimateCost, fmtCost } from './lib/pricing';
 import * as cp from 'child_process';
 import * as os from 'os';
 import * as path from 'path';
@@ -78,6 +80,8 @@ interface UiMessage {
 	durationMs?: number;
 	/** Creation time (for the hover "Nm ago" meta row). */
 	at?: number;
+	/** Estimated tokens + cost for the run that produced this message. */
+	usage?: { tokens: number; cost: number };
 }
 
 interface Session {
@@ -728,6 +732,42 @@ class OpenovaChatViewProvider implements vscode.WebviewViewProvider {
 		};
 	}
 
+	/** Resolve a "provider:model" (or bare model) spec into a callable route. */
+	private async routeFor(
+		spec: string
+	): Promise<{ provider: AIProvider; model: string; baseUrl: string; apiKey?: string } | null> {
+		const s = this.settings();
+		const parsed = parseRouteSpec(spec, Object.keys(PROVIDERS), s.provider);
+		if (!parsed) { return null; }
+		const info = providerInfo(parsed.provider);
+		return {
+			provider: parsed.provider,
+			model: parsed.model,
+			// The user's base-URL override only applies to their active provider.
+			baseUrl: parsed.provider === s.provider ? (s.baseUrl || info.baseURL) : info.baseURL,
+			apiKey: await getApiKey(parsed.provider)
+		};
+	}
+
+	/** Per-task model override (openova.modelPlan / modelTitle / modelCompletion). */
+	private async taskRoute(
+		kind: 'Plan' | 'Title' | 'Completion'
+	): Promise<{ provider: AIProvider; model: string; baseUrl: string; apiKey?: string } | null> {
+		const spec = vscode.workspace.getConfiguration('openova').get<string>(`model${kind}`, '').trim();
+		return spec ? this.routeFor(spec) : null;
+	}
+
+	/** The configured router fallback chain, keys resolved. */
+	private async fallbackRoutes(): Promise<Route[]> {
+		const specs = vscode.workspace.getConfiguration('openova').get<string[]>('fallbackModels', []);
+		const out: Route[] = [];
+		for (const spec of specs) {
+			const r = await this.routeFor(spec);
+			if (r) { out.push({ provider: r.provider, model: r.model, baseURL: r.baseUrl, apiKey: r.apiKey }); }
+		}
+		return out;
+	}
+
 	private session(id: string): Session | undefined {
 		return this.sessions.find((s) => s.id === id);
 	}
@@ -1352,12 +1392,14 @@ class OpenovaChatViewProvider implements vscode.WebviewViewProvider {
 		const s = this.settings();
 		void (async () => {
 			try {
+				// Titles may use their own (cheap) model — openova.modelTitle.
+				const titleRoute = await this.taskRoute('Title');
 				const out = await complete({
 					requestId: uid(),
-					provider: s.provider,
-					baseURL: s.baseUrl || undefined,
-					apiKey: await getApiKey(s.provider),
-					model: s.model,
+					provider: titleRoute?.provider ?? s.provider,
+					baseURL: titleRoute ? titleRoute.baseUrl : (s.baseUrl || undefined),
+					apiKey: titleRoute ? titleRoute.apiKey : await getApiKey(s.provider),
+					model: titleRoute?.model ?? s.model,
 					system:
 						'You name coding chats. Reply with ONLY a concise 3-6 word title for the conversation. No quotes, no trailing punctuation, no explanations.',
 					messages: [
@@ -1480,14 +1522,16 @@ class OpenovaChatViewProvider implements vscode.WebviewViewProvider {
 		const run: RunState = { stop: false, requestId: uid() };
 		this.runs.set(sessionId, run);
 		const s = this.settings();
+		// Plan drafts may use their own model (openova.modelPlan).
+		const planRoute = await this.taskRoute('Plan');
 		try {
 			let out = '';
 			await runChat({
 				requestId: run.requestId!,
-				provider: s.provider,
-				baseURL: s.baseUrl || undefined,
-				apiKey: await getApiKey(s.provider),
-				model: s.model,
+				provider: planRoute?.provider ?? s.provider,
+				baseURL: planRoute ? planRoute.baseUrl : (s.baseUrl || undefined),
+				apiKey: planRoute ? planRoute.apiKey : await getApiKey(s.provider),
+				model: planRoute?.model ?? s.model,
 				system:
 					'You are a senior software engineer planning a coding task. Respond with ONLY this exact format:\n' +
 					'PLAN: <short title>\n1. <first step>\n2. <second step>\n' +
@@ -1891,6 +1935,16 @@ class OpenovaChatViewProvider implements vscode.WebviewViewProvider {
 			? `Earlier conversation (REFERENCE ONLY — that work is already done, never redo it):\n${priorTurns.join('\n')}\n\n---\nThe user's CURRENT request (respond to THIS): ${text}`
 			: text;
 
+		// Cost meter: token estimates accumulate per run; the budget warning
+		// fires once per run when the session's estimated spend crosses it.
+		const localProvider = providerInfo(s.provider).local;
+		const budgetUSD = vscode.workspace.getConfiguration('openova').get<number>('budgetUSD', 0);
+		let runTokens = 0;
+		let runCost = 0;
+		let budgetWarned = false;
+		const sessionCost = (): number =>
+			(this.session(sessionId)?.messages ?? []).reduce((n, m) => n + (m.usage?.cost ?? 0), 0);
+
 		try {
 			await runAgent(
 				taskWithContext,
@@ -1901,9 +1955,35 @@ class OpenovaChatViewProvider implements vscode.WebviewViewProvider {
 					apiKey: await getApiKey(s.provider),
 					model: s.model,
 					maxTokens: 8192,
-					extraRules: [envRules, projectRules, mcpRules].filter(Boolean).join('\n\n') || undefined
+					extraRules: [envRules, projectRules, mcpRules].filter(Boolean).join('\n\n') || undefined,
+					fallbacks: await this.fallbackRoutes()
 				},
 				{
+					onUsage: (promptChars, completionChars) => {
+						const inTok = estTokens(promptChars);
+						const outTok = estTokens(completionChars);
+						runTokens += inTok + outTok;
+						runCost += estimateCost(s.model, inTok, outTok, localProvider);
+						trace(`usage: tokens=${runTokens} cost=${runCost.toFixed(5)}`);
+						this.mutateMsg(sessionId, agentMsg.id, (m) => {
+							m.usage = { tokens: runTokens, cost: runCost };
+						});
+						this.post({
+							type: 'usage',
+							sessionId,
+							msgId: agentMsg.id,
+							tokens: runTokens,
+							cost: runCost,
+							sessionCost: sessionCost()
+						});
+						if (budgetUSD > 0 && !budgetWarned && sessionCost() > budgetUSD) {
+							budgetWarned = true;
+							trace(`budget exceeded: ${sessionCost().toFixed(4)} > ${budgetUSD}`);
+							void vscode.window.showWarningMessage(
+								`Openova: this chat's estimated spend (${fmtCost(sessionCost())}) has passed your ${fmtCost(budgetUSD)} budget (openova.budgetUSD). The run continues — stop it if you want.`
+							);
+						}
+					},
 					onThought: (t) => addStep({ id: uid(), kind: 'thought', title: t, status: 'done' }),
 					onAction: (name, args) => {
 						currentToolId = uid();

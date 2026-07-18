@@ -106,12 +106,20 @@ export interface ChatSession {
 export type AIProvider =
 	| 'anthropic'
 	| 'openai'
+	| 'gemini'
 	| 'openrouter'
 	| 'mistral'
+	| 'groq'
+	| 'together'
+	| 'fireworks'
+	| 'deepseek'
+	| 'xai'
 	| 'opencode'
 	| 'opencode-go'
 	| 'lmstudio'
 	| 'ollama'
+	| 'llamacpp'
+	| 'vllm'
 	| 'openai-compatible';
 
 export type ChatMode = 'ask' | 'agent' | 'plan' | 'debug';

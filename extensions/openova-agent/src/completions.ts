@@ -10,17 +10,29 @@ import * as vscode from 'vscode';
 import { complete, abortRequest } from './lib/ai';
 import { getApiKey } from './keys';
 import type { AIProvider } from './types';
+import { PROVIDERS, providerInfo } from './lib/providers';
+import { parseRouteSpec } from './lib/router';
 
 const uid = (): string => Math.random().toString(36).slice(2);
 
 function settings(): { provider: AIProvider; model: string; baseUrl: string; enabled: boolean } {
 	const cfg = vscode.workspace.getConfiguration('openova');
-	return {
-		provider: cfg.get<string>('provider', 'ollama') as AIProvider,
-		model: cfg.get<string>('model', 'qwen3.5:9b'),
-		baseUrl: cfg.get<string>('baseUrl', ''),
-		enabled: cfg.get<boolean>('tabCompletion', true)
-	};
+	const provider = cfg.get<string>('provider', 'ollama') as AIProvider;
+	const model = cfg.get<string>('model', 'qwen3.5:9b');
+	const baseUrl = cfg.get<string>('baseUrl', '');
+	// Per-task override: a small fast model just for ghost text
+	// (openova.modelCompletion, "provider:model" or bare model).
+	const spec = cfg.get<string>('modelCompletion', '').trim();
+	const routed = spec ? parseRouteSpec(spec, Object.keys(PROVIDERS), provider) : null;
+	if (routed) {
+		return {
+			provider: routed.provider,
+			model: routed.model,
+			baseUrl: routed.provider === provider ? baseUrl : providerInfo(routed.provider).baseURL,
+			enabled: cfg.get<boolean>('tabCompletion', true)
+		};
+	}
+	return { provider, model, baseUrl, enabled: cfg.get<boolean>('tabCompletion', true) };
 }
 
 /** Core completion: returns the ghost text for a document position. */

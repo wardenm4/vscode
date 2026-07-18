@@ -47,6 +47,18 @@ export const PROVIDERS: Record<AIProvider, ProviderInfo> = {
 		models: ['gpt-4o', 'gpt-4o-mini', 'o3-mini', 'gpt-4.1'],
 		discover: true
 	},
+	gemini: {
+		id: 'gemini',
+		label: 'Google (Gemini)',
+		// Google's OpenAI-compatibility endpoint — no bespoke client needed.
+		baseURL: 'https://generativelanguage.googleapis.com/v1beta/openai',
+		needsKey: true,
+		secretKey: 'gemini',
+		kind: 'openai',
+		local: false,
+		models: ['gemini-2.5-pro', 'gemini-2.5-flash', 'gemini-2.0-flash'],
+		discover: true
+	},
 	openrouter: {
 		id: 'openrouter',
 		label: 'OpenRouter',
@@ -72,6 +84,61 @@ export const PROVIDERS: Record<AIProvider, ProviderInfo> = {
 		kind: 'openai',
 		local: false,
 		models: ['mistral-large-latest', 'mistral-small-latest', 'codestral-latest'],
+		discover: true
+	},
+	groq: {
+		id: 'groq',
+		label: 'Groq (fast inference)',
+		baseURL: 'https://api.groq.com/openai/v1',
+		needsKey: true,
+		secretKey: 'groq',
+		kind: 'openai',
+		local: false,
+		models: ['llama-3.3-70b-versatile', 'qwen-2.5-coder-32b', 'deepseek-r1-distill-llama-70b'],
+		discover: true
+	},
+	together: {
+		id: 'together',
+		label: 'Together AI',
+		baseURL: 'https://api.together.xyz/v1',
+		needsKey: true,
+		secretKey: 'together',
+		kind: 'openai',
+		local: false,
+		models: ['meta-llama/Llama-3.3-70B-Instruct-Turbo', 'Qwen/Qwen2.5-Coder-32B-Instruct'],
+		discover: true
+	},
+	fireworks: {
+		id: 'fireworks',
+		label: 'Fireworks AI',
+		baseURL: 'https://api.fireworks.ai/inference/v1',
+		needsKey: true,
+		secretKey: 'fireworks',
+		kind: 'openai',
+		local: false,
+		models: ['accounts/fireworks/models/llama-v3p3-70b-instruct', 'accounts/fireworks/models/qwen2p5-coder-32b-instruct'],
+		discover: true
+	},
+	deepseek: {
+		id: 'deepseek',
+		label: 'DeepSeek',
+		baseURL: 'https://api.deepseek.com/v1',
+		needsKey: true,
+		secretKey: 'deepseek',
+		kind: 'openai',
+		local: false,
+		models: ['deepseek-chat', 'deepseek-reasoner'],
+		discover: true
+	},
+	xai: {
+		id: 'xai',
+		label: 'xAI (Grok)',
+		baseURL: 'https://api.x.ai/v1',
+		needsKey: true,
+		secretKey: 'xai',
+		kind: 'openai',
+		local: false,
+		models: ['grok-4', 'grok-3', 'grok-3-mini'],
 		discover: true
 	},
 	opencode: {
@@ -114,6 +181,28 @@ export const PROVIDERS: Record<AIProvider, ProviderInfo> = {
 		needsKey: false,
 		secretKey: '',
 		kind: 'ollama',
+		local: true,
+		models: [],
+		discover: true
+	},
+	llamacpp: {
+		id: 'llamacpp',
+		label: 'llama.cpp (local)',
+		baseURL: 'http://localhost:8080/v1',
+		needsKey: false,
+		secretKey: '',
+		kind: 'openai',
+		local: true,
+		models: [],
+		discover: true
+	},
+	vllm: {
+		id: 'vllm',
+		label: 'vLLM (local)',
+		baseURL: 'http://localhost:8000/v1',
+		needsKey: false,
+		secretKey: '',
+		kind: 'openai',
 		local: true,
 		models: [],
 		discover: true

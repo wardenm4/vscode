@@ -4,8 +4,8 @@
  *--------------------------------------------------------------------------------------------*/
 
 import type { AIProvider } from '../types';
-import { complete } from './ai';
 import { parseAction } from './agentProtocol';
+import { completeRouted, type Route } from './router';
 
 // A provider-agnostic ReAct-style coding agent. The model is told to respond with
 // ONE tool call each turn using a robust XML-tag format (so multi-line file
@@ -71,6 +71,8 @@ export interface AgentConfig {
 	maxTokens: number;
 	/** User + project AI rules appended to the agent system prompt. */
 	extraRules?: string;
+	/** Router fallback chain, tried in order when the primary model fails. */
+	fallbacks?: Route[];
 }
 
 export interface AgentCallbacks {
@@ -286,13 +288,9 @@ export async function runAgent(
 		const requestId = Math.random().toString(36).slice(2);
 		cb.onRequestStart?.(requestId);
 		try {
-			raw = await complete(
+			const routed = await completeRouted(
 				{
 					requestId,
-					provider: config.provider,
-					apiKey: config.apiKey,
-					baseURL: config.baseURL,
-					model: config.model,
 					system: config.extraRules?.trim()
 						? `${SYSTEM}\n\n# Additional rules to follow\n${config.extraRules.trim()}`
 						: SYSTEM,
@@ -300,8 +298,12 @@ export async function runAgent(
 					temperature: 0,
 					maxTokens: config.maxTokens
 				},
+				{ provider: config.provider, model: config.model, baseURL: config.baseURL, apiKey: config.apiKey },
+				config.fallbacks ?? [],
 				(full) => cb.onStreamDelta?.(full)
 			);
+			raw = routed.text;
+			if (routed.note) { cb.onThought(`Model router: ${routed.note}`); }
 		} catch (e) {
 			cb.onError(e instanceof Error ? e.message : String(e));
 			return;

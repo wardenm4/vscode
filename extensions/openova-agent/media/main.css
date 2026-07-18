@@ -2297,3 +2297,19 @@ body[data-mode='window'] .win-main > .composer textarea {
 .radd {
 	color: var(--ov-success);
 }
+
+/* usage meter: mono, quiet, BridgeAgent-style */
+.work-usage {
+	margin-left: 8px;
+	font-family: var(--ov-mono);
+	font-size: 10.5px;
+	color: var(--vscode-descriptionForeground);
+	opacity: 0.85;
+}
+.spend-meter {
+	margin-left: 6px;
+	font-family: var(--ov-mono);
+	font-size: 10.5px;
+	color: var(--vscode-descriptionForeground);
+	align-self: center;
+}

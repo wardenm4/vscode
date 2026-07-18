@@ -97,12 +97,20 @@
           "enum": [
             "anthropic",
             "openai",
+            "gemini",
             "openrouter",
             "mistral",
+            "groq",
+            "together",
+            "fireworks",
+            "deepseek",
+            "xai",
             "opencode",
             "opencode-go",
             "lmstudio",
             "ollama",
+            "llamacpp",
+            "vllm",
             "openai-compatible"
           ],
           "default": "ollama",
@@ -190,6 +198,34 @@
           "type": "boolean",
           "default": true,
           "description": "Ghost-text tab completions from the configured model (Tab to accept)."
+        },
+        "openova.fallbackModels": {
+          "type": "array",
+          "default": [],
+          "items": {
+            "type": "string"
+          },
+          "description": "Model fallback chain for agent runs, tried in order when the primary model fails (rate limit / outage). Entries are \"provider:model\" (e.g. \"groq:llama-3.3-70b-versatile\") or a bare model name on the current provider. Failed models cool down for 90s."
+        },
+        "openova.modelPlan": {
+          "type": "string",
+          "default": "",
+          "description": "Model used for Plan mode drafts, as \"provider:model\" or a bare model on the current provider. Empty = the main model."
+        },
+        "openova.modelTitle": {
+          "type": "string",
+          "default": "",
+          "description": "Model used to auto-title chats (a cheap/fast model is ideal). \"provider:model\" or bare model. Empty = the main model."
+        },
+        "openova.modelCompletion": {
+          "type": "string",
+          "default": "",
+          "description": "Model used for tab ghost-text completions (a small fast model is ideal, e.g. a local Qwen coder). \"provider:model\" or bare model. Empty = the main model."
+        },
+        "openova.budgetUSD": {
+          "type": "number",
+          "default": 0,
+          "description": "Soft session budget in USD (estimated). When a chat's estimated spend crosses it you get a warning; 0 disables. Estimates use ~4 chars/token and list prices — a gauge, not a bill."
         },
         "openova.mcpServers": {
           "type": "array",
