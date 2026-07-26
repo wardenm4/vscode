@@ -12,8 +12,10 @@
 > openova.newWorktree + repo-menu entry), best-of-N parallel runs
 > (ea597042 — Parallel mode: N attempts in isolated worktrees, keep one,
 > auto-cleanup) together with 20 defects fixed from an adversarial review
-> of all of the above. Still open by choice: embeddings upgrade for the
-> index (BM25 is the shipped baseline), optional Design Mode.
+> of all of the above, and semantic codebase search (43d760b0 — hybrid
+> BM25 + local embeddings, persistent per-workspace vector cache, silent
+> fallback to keyword search when no embedder is reachable).
+> Still open by choice: optional Design Mode.
 
 Goal: an open-source, highly customizable Cursor replacement. Agent parity with
 Cursor / Claude Code / Codex; Kiro-style spec-driven mode; universal BYO
