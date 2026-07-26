@@ -7,9 +7,11 @@
 // it unit-tests standalone), chunks text files, and keeps one cached BM25
 // index per root with a short TTL — an agent run rebuilds at most once a
 // minute, and queries within a run hit the cache.
+import * as crypto from 'crypto';
 import * as fs from 'fs';
 import * as path from 'path';
 import { buildIndex, chunkFile, queryIndex, type Bm25Index, type Chunk } from './lib/bm25';
+import { cosine, embedBatch, hybridScore, type Embedder } from './lib/embeddings';
 
 const SKIP_DIRS = new Set([
 	'node_modules', '.git', 'out', 'dist', 'build', '.openova', '.build',
@@ -136,4 +138,217 @@ export function searchCodebase(
 export function indexStats(root: string): { files: number; chunks: number } {
 	const entry = cache.get(root);
 	return entry ? { files: entry.files, chunks: entry.index.chunks.length } : { files: 0, chunks: 0 };
+}
+
+// ---- semantic layer --------------------------------------------------------
+// Chunks are embedded ONCE per content hash and cached on disk, so reopening a
+// workspace (or editing one file) costs almost nothing. Search stays lexical
+// until the whole corpus is embedded — a partially embedded index would rank
+// the embedded half unfairly high.
+
+export interface SemanticOptions {
+	/** Directory for the persistent vector cache (extension global storage). */
+	cacheDir: string;
+	embedder: Embedder;
+	/** Weight of the semantic score in the blend (0 = pure BM25, 1 = pure vector). */
+	alpha?: number;
+	/** Called when a background embedding pass finishes a batch. */
+	onProgress?: (done: number, total: number) => void;
+	/** Diagnostics for the background pass (start / finish / failure). */
+	onEvent?: (msg: string) => void;
+}
+
+interface VectorStore {
+	model: string;
+	dim: number;
+	/** content hash -> vector */
+	vectors: Record<string, number[]>;
+}
+
+const stores = new Map<string, VectorStore>();
+const embedJobs = new Map<string, Promise<void>>();
+const EMBED_BATCH = 8;
+/** Embedding models have a context window: a batch whose TOTAL text exceeds
+ *  it fails as a unit, so cap requests by characters, not just item count. */
+const EMBED_CHAR_BUDGET = 8_000;
+/** Retrieval quality barely moves past the first couple of KB of a chunk,
+ *  and this keeps any single item inside the model's window. */
+const EMBED_TEXT_CAP = 2_000;
+const VECTOR_PRECISION = 5;
+
+function hashText(text: string): string {
+	return crypto.createHash('sha1').update(text).digest('base64url').slice(0, 22);
+}
+
+/** One workspace = one cache, however its path happens to be spelled
+ *  (drive-letter case and separators vary between callers on Windows). */
+function rootKey(root: string): string {
+	return path.resolve(root).replace(/\\/g, '/').toLowerCase();
+}
+
+function storePath(cacheDir: string, root: string): string {
+	return path.join(cacheDir, `vectors-${hashText(rootKey(root))}.json`);
+}
+
+function loadStore(cacheDir: string, root: string, model: string): VectorStore {
+	const key = `${rootKey(root)}::${model}`;
+	const cached = stores.get(key);
+	if (cached) { return cached; }
+	let store: VectorStore = { model, dim: 0, vectors: {} };
+	try {
+		const raw = JSON.parse(fs.readFileSync(storePath(cacheDir, root), 'utf8')) as VectorStore;
+		// A different embedding model produces incompatible vectors.
+		if (raw?.model === model && raw.vectors) { store = raw; }
+	} catch {
+		/* no cache yet */
+	}
+	stores.set(key, store);
+	return store;
+}
+
+function saveStore(cacheDir: string, root: string, store: VectorStore): void {
+	try {
+		fs.mkdirSync(cacheDir, { recursive: true });
+		fs.writeFileSync(storePath(cacheDir, root), JSON.stringify(store), 'utf8');
+	} catch {
+		/* cache is an optimisation — never fail the search over it */
+	}
+}
+
+/** Embed every chunk missing from the store. Safe to call repeatedly; only
+ *  one pass per root runs at a time. */
+export function ensureEmbeddings(root: string, chunks: Chunk[], opts: SemanticOptions): Promise<void> {
+	const key = `${rootKey(root)}::${opts.embedder.model}`;
+	const running = embedJobs.get(key);
+	if (running) { return running; }
+	const job = (async () => {
+		const store = loadStore(opts.cacheDir, root, opts.embedder.model);
+		const missing = chunks.filter((c) => !store.vectors[hashText(c.text)]);
+		opts.onEvent?.(`embed job: ${missing.length} of ${chunks.length} chunks to embed -> ${opts.cacheDir}`);
+		if (!missing.length) { return; }
+		let done = 0;
+		let dirty = false;
+		let sinceSave = 0;
+
+		/** Embed one group, halving it on failure so a single oversized chunk
+		 *  can't sink the whole pass. Returns false only if nothing worked. */
+		const embedGroup = async (group: Chunk[]): Promise<boolean> => {
+			const vecs = await embedBatch(group.map((c) => c.text.slice(0, EMBED_TEXT_CAP)), opts.embedder);
+			if (vecs) {
+				group.forEach((c, j) => {
+					store.vectors[hashText(c.text)] = vecs[j].map((v) => Number(v.toFixed(VECTOR_PRECISION)));
+				});
+				store.dim = vecs[0].length;
+				dirty = true;
+				done += group.length;
+				sinceSave += group.length;
+				opts.onProgress?.(done, missing.length);
+				return true;
+			}
+			if (group.length === 1) {
+				// One chunk the endpoint refuses. Mark it as attempted (empty
+				// vector = never matches) so coverage can still complete — but
+				// ONLY once some other chunk has embedded successfully, or a
+				// dead server would "cover" the corpus with zero vectors.
+				if (store.dim > 0) {
+					store.vectors[hashText(group[0].text)] = [];
+					dirty = true;
+					done += 1;
+					sinceSave += 1;
+				}
+				return false;
+			}
+			const mid = Math.ceil(group.length / 2);
+			const a = await embedGroup(group.slice(0, mid));
+			const b = await embedGroup(group.slice(mid));
+			return a || b;
+		};
+
+		try {
+			let batch: Chunk[] = [];
+			let chars = 0;
+			const flush = async (): Promise<void> => {
+				if (!batch.length) { return; }
+				await embedGroup(batch);
+				batch = [];
+				chars = 0;
+				if (sinceSave >= 64) { saveStore(opts.cacheDir, root, store); dirty = false; sinceSave = 0; }
+			};
+			for (const c of missing) {
+				const len = Math.min(c.text.length, EMBED_TEXT_CAP);
+				if (batch.length >= EMBED_BATCH || chars + len > EMBED_CHAR_BUDGET) { await flush(); }
+				batch.push(c);
+				chars += len;
+			}
+			await flush();
+		} catch (e) {
+			opts.onEvent?.(`embed job threw: ${e instanceof Error ? e.message : String(e)}`);
+			throw e;
+		} finally {
+			if (dirty) { saveStore(opts.cacheDir, root, store); }
+			opts.onEvent?.(`embed job done: ${done}/${missing.length} embedded`);
+		}
+	})()
+		.catch(() => { /* reported via onEvent — never an unhandled rejection */ })
+		.finally(() => embedJobs.delete(key));
+	embedJobs.set(key, job);
+	return job;
+}
+
+/**
+ * Semantic (hybrid) codebase search. Falls back to plain BM25 whenever the
+ * corpus isn't fully embedded yet or the embedder is unreachable, and kicks
+ * off the embedding pass in the background so the next search is semantic.
+ */
+export async function searchCodebaseSemantic(
+	root: string,
+	query: string,
+	opts: SemanticOptions,
+	topK = 8
+): Promise<{ hits: { file: string; startLine: number; text: string }[]; mode: 'semantic' | 'lexical' }> {
+	// Always build/refresh the lexical index first — it is the fallback and
+	// the source of the chunk list.
+	const lexical = searchCodebase(root, query, topK);
+	const entry = cache.get(root);
+	if (!entry) { return { hits: lexical, mode: 'lexical' }; }
+	const chunks = entry.index.chunks;
+	const store = loadStore(opts.cacheDir, root, opts.embedder.model);
+	const covered = chunks.every((c) => store.vectors[hashText(c.text)]);
+	if (!covered) {
+		// Warm the cache for next time without blocking this search.
+		void ensureEmbeddings(root, chunks, opts);
+		return { hits: lexical, mode: 'lexical' };
+	}
+	const qVec = (await embedBatch([query], opts.embedder, 20_000))?.[0];
+	if (!qVec) { return { hits: lexical, mode: 'lexical' }; }
+
+	// Rank the WHOLE corpus: BM25 alone can't surface a chunk that shares no
+	// keywords with the query, which is the entire point of going semantic.
+	const bm25 = new Map<string, number>();
+	for (const h of queryIndex(entry.index, query, chunks.length)) {
+		bm25.set(`${h.file}:${h.startLine}`, h.score);
+	}
+	const scored = chunks.map((c) => ({
+		chunk: c,
+		bm25: bm25.get(`${c.file}:${c.startLine}`) ?? 0,
+		sem: cosine(qVec, store.vectors[hashText(c.text)])
+	}));
+	const blended = hybridScore(scored, opts.alpha ?? 0.5);
+	const hits = scored
+		.map((s, i) => ({ ...s, score: blended[i] }))
+		.sort((a, b) => b.score - a.score)
+		.slice(0, topK)
+		.map((s) => ({ file: s.chunk.file, startLine: s.chunk.startLine, text: s.chunk.text.slice(0, 1200) }));
+	return { hits, mode: 'semantic' };
+}
+
+/** Coverage report for status surfaces / tests. */
+export function embeddingStats(root: string, cacheDir: string, model: string): { embedded: number; chunks: number } {
+	const entry = cache.get(root);
+	const store = loadStore(cacheDir, root, model);
+	const chunks = entry?.index.chunks ?? [];
+	return {
+		embedded: chunks.filter((c) => store.vectors[hashText(c.text)]).length,
+		chunks: chunks.length
+	};
 }

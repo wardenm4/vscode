@@ -267,6 +267,32 @@
           "default": "",
           "description": "Model used for tab ghost-text completions (a small fast model is ideal, e.g. a local Qwen coder). \"provider:model\" or bare model. Empty = the main model."
         },
+        "openova.embeddings": {
+          "type": "string",
+          "enum": [
+            "auto",
+            "off"
+          ],
+          "default": "auto",
+          "description": "Semantic codebase search. 'auto' uses a local embedding model when one is reachable (LM Studio or Ollama) and silently stays on keyword search otherwise; 'off' always uses keyword search. Nothing is sent to a cloud provider unless you point openova.embeddingBaseUrl at one."
+        },
+        "openova.embeddingModel": {
+          "type": "string",
+          "default": "",
+          "description": "Embedding model id (e.g. 'nomic-embed-text' on Ollama, 'text-embedding-nomic-embed-text-v1.5' on LM Studio). Empty auto-picks the first embedding model the server reports."
+        },
+        "openova.embeddingBaseUrl": {
+          "type": "string",
+          "default": "",
+          "description": "Embedding endpoint. Empty probes LM Studio (http://localhost:1234/v1) then Ollama (http://localhost:11434). A URL ending in /v1 is treated as OpenAI-compatible."
+        },
+        "openova.embeddingWeight": {
+          "type": "number",
+          "default": 0.5,
+          "minimum": 0,
+          "maximum": 1,
+          "description": "Blend between keyword and semantic ranking for codebase_search: 0 is pure keyword (BM25), 1 is pure vector similarity."
+        },
         "openova.parallelRuns": {
           "type": "number",
           "default": 2,

@@ -1958,7 +1958,11 @@ class OpenovaChatViewProvider implements vscode.WebviewViewProvider {
 					// the model, which would kill that attempt before step one.
 					if (i > 0) { await new Promise((r) => setTimeout(r, i * 1500)); }
 					const startedAt = Date.now();
-					const host: ToolHost = { root: cand.dir, sessionAllowed: this.sessionAllowed };
+					const host: ToolHost = {
+						root: cand.dir,
+						sessionAllowed: this.sessionAllowed,
+						cacheDir: this.context.globalStorageUri.fsPath
+					};
 					const tools = createTools(host);
 					// Per-candidate rules come from the candidate's own checkout.
 					const projectRules = collectRules(cand.dir, []).inject;
@@ -2256,6 +2260,9 @@ class OpenovaChatViewProvider implements vscode.WebviewViewProvider {
 		const host: ToolHost = {
 			root,
 			sessionAllowed: this.sessionAllowed,
+			cacheDir: this.context.globalStorageUri.fsPath,
+			onSearchMode: (mode, hits) => trace(`codebase_search: ${mode} hits=${hits}`),
+			onDebug: (msg) => trace(msg),
 			onWrite: ({ relPath, fullPath, existed, before, content }) => {
 				const d = lineDiff(before, content);
 				const led = writes.get(fullPath);

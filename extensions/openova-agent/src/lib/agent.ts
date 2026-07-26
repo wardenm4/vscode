@@ -271,6 +271,10 @@ export async function runAgent(
 	// same file. Track per-file write counts and last-content fingerprints.
 	const writeCounts = new Map<string, number>();
 	const lastContent = new Map<string, string>();
+	// Repeat guard: weak models re-issue the SAME read-only call (search,
+	// codebase_search, list_files) forever because the answer never changes.
+	// Count identical calls and cut them off with an explicit instruction.
+	const callCounts = new Map<string, number>();
 
 	// The step cap is a BUDGET, not a wall: when it runs out the host can ask
 	// the user and grant another round — the loop resumes with context intact.
@@ -379,6 +383,22 @@ export async function runAgent(
 
 		let observation = '';
 		let toolFailed = false;
+		// Repeat guard for idempotent lookups: after the third identical call
+		// the answer is never going to change, so refuse and tell the model to
+		// act on what it already has.
+		if (['search', 'codebase_search', 'list_files', 'read_file'].includes(action.tool)) {
+			const sig = `${action.tool}:${JSON.stringify(action.args)}`;
+			const seen = (callCounts.get(sig) ?? 0) + 1;
+			callCounts.set(sig, seen);
+			if (seen > 3) {
+				const obs =
+					`You already ran this exact ${action.tool} ${seen - 1} times and the result will not change. ` +
+					'Use the results you have: take the next concrete action, or call finish with your answer.';
+				cb.onObservation(obs, true);
+				transcript.push({ role: 'user', content: `Result:\n${obs}` });
+				continue;
+			}
+		}
 		// Deterministic PreToolUse hook — a non-zero exit blocks the tool.
 		if (tools.preToolHook && action.tool !== 'finish') {
 			const blocked = await tools.preToolHook(action.tool, action.args);

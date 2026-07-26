@@ -13,7 +13,25 @@ import * as cp from 'child_process';
 import type { AgentTools } from './lib/agent';
 import { classifyCommand } from './lib/commandGate';
 import { isDevRunActive } from './devMode';
-import { searchCodebase, invalidateIndex } from './codebaseIndex';
+import { searchCodebase, searchCodebaseSemantic, invalidateIndex } from './codebaseIndex';
+import { detectEmbedder, type Embedder } from './lib/embeddings';
+
+// Embedder detection probes local servers, so cache the answer for the
+// session (re-probed when the settings change).
+let embedderCache: { key: string; value: Embedder | null } | undefined;
+
+async function embedderForWorkspace(): Promise<Embedder | null> {
+	const cfg = vscode.workspace.getConfiguration('openova');
+	const mode = cfg.get<string>('embeddings', 'auto');
+	if (mode === 'off') { return null; }
+	const baseURL = cfg.get<string>('embeddingBaseUrl', '').trim();
+	const model = cfg.get<string>('embeddingModel', '').trim();
+	const key = `${mode}|${baseURL}|${model}`;
+	if (embedderCache?.key === key) { return embedderCache.value; }
+	const value = await detectEmbedder({ baseURL, model });
+	embedderCache = { key, value };
+	return value;
+}
 
 const EXCLUDE = '{**/node_modules/**,**/.git/**,**/out/**,**/dist/**,**/build/**,**/.openova/**}';
 
@@ -21,6 +39,12 @@ export interface ToolHost {
 	root: string;
 	/** Commands the user allowed for the rest of this session. */
 	sessionAllowed: Set<string>;
+	/** Extension storage dir for the semantic index's vector cache. */
+	cacheDir?: string;
+	/** Reports which ranking a codebase_search used (for status/tracing). */
+	onSearchMode?: (mode: 'semantic' | 'lexical', hits: number) => void;
+	/** Diagnostic breadcrumbs for the semantic index (dev tracing). */
+	onDebug?: (msg: string) => void;
 	/** Reports a file write for the run ledger (review bar / undo). `isNew`
 	 *  comes from a real existence check — never inferred from `before`. */
 	onWrite?: (info: { relPath: string; fullPath: string; existed: boolean; before: string; content: string }) => void;
@@ -276,10 +300,29 @@ export function createTools(host: ToolHost): AgentTools {
 		},
 
 		codebaseSearch: async (query) => {
-			// BM25 over chunked workspace files (cached with a short TTL). Runs
-			// off the event loop's hot path is unnecessary — indexing 1200 files
-			// takes well under a second and only happens once a minute.
-			return searchCodebase(host.root, query);
+			// Hybrid when a local embedder is reachable AND the corpus is fully
+			// embedded; plain BM25 otherwise (the embedding pass warms up in the
+			// background so later searches upgrade themselves).
+			const embedder = host.cacheDir ? await embedderForWorkspace() : null;
+			host.onDebug?.(
+				`index: cacheDir=${host.cacheDir ? 'yes' : 'MISSING'} embedder=${embedder ? `${embedder.kind}/${embedder.model}` : 'none'}`
+			);
+			if (embedder && host.cacheDir) {
+				const r = await searchCodebaseSemantic(host.root, query, {
+					cacheDir: host.cacheDir,
+					embedder,
+					alpha: vscode.workspace.getConfiguration('openova').get<number>('embeddingWeight', 0.5),
+					onProgress: (done, total) => {
+						if (done === total || done % 64 === 0) { host.onDebug?.(`embedding ${done}/${total}`); }
+					},
+					onEvent: (msg) => host.onDebug?.(msg)
+				});
+				host.onSearchMode?.(r.mode, r.hits.length);
+				return r.hits;
+			}
+			const hits = searchCodebase(host.root, query);
+			host.onSearchMode?.('lexical', hits.length);
+			return hits;
 		},
 
 		writeFile: async (rel, content) => {
