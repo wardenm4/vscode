@@ -5,13 +5,15 @@
 > (P3), 225dcf83 (P4), c2915146 (P5), a61ec895 (P6), af3e7bb8 (P7) on
 > `openova-base`.
 >
-> **Deferred items CLEARED same day:** BM25 codebase index (880fb54d —
+> **Deferred items CLEARED:** BM25 codebase index (880fb54d —
 > codebase_search returns ranked chunks), interactive CDP browser
 > (277d08fe — browser_click / browser_type / live snapshot over a
 > hand-rolled DevTools WebSocket), git worktree runs (ca137131 —
-> openova.newWorktree + repo-menu entry). Still open by choice: embeddings
-> upgrade for the index (BM25 is the shipped baseline), best-of-N parallel
-> runs, optional Design Mode.
+> openova.newWorktree + repo-menu entry), best-of-N parallel runs
+> (ea597042 — Parallel mode: N attempts in isolated worktrees, keep one,
+> auto-cleanup) together with 20 defects fixed from an adversarial review
+> of all of the above. Still open by choice: embeddings upgrade for the
+> index (BM25 is the shipped baseline), optional Design Mode.
 
 Goal: an open-source, highly customizable Cursor replacement. Agent parity with
 Cursor / Claude Code / Codex; Kiro-style spec-driven mode; universal BYO
