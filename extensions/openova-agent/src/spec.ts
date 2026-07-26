@@ -92,24 +92,45 @@ export function docTitle(md: string, fallback: string): string {
 	return (m?.[1] ?? fallback).trim().slice(0, 60);
 }
 
-/** Section headers "## R1. Name" -> ["R1. Name", ...] for the approval card. */
+/** Section headers "## R1. Name" -> ["R1. Name", ...] for the approval card.
+ *  Tolerates the shapes models actually emit: ### instead of ##, **bold**
+ *  headings, "Requirement 1:" spelled out. */
 export function requirementTitles(md: string): string[] {
-	return [...md.matchAll(/^##\s+(R\d+\.?\s*.+)$/gim)].map((m) => m[1].trim()).slice(0, 12);
-}
-
-/** Checkbox lines -> step texts for the executable plan card. */
-export function taskSteps(md: string): string[] {
-	return [...md.matchAll(/^[-*]\s*\[[ xX]?\]\s*(.+)$/gm)]
-		.map((m) => m[1].replace(/^\d+[.)]\s*/, '').trim())
+	return [...md.matchAll(/^#{2,4}[ \t]*\**[ \t]*(R(?:equirement)?[ \t]*\d+[.:)]?[ \t]*.+?)\**[ \t]*$/gim)]
+		.map((m) => m[1].trim())
 		.filter(Boolean)
-		.slice(0, 16);
+		.slice(0, 12);
 }
 
-/** Rewrite tasks.md checkboxes to match completed step indices (1-based). */
-export function checkOffTasks(md: string, doneIndices: Set<number>): string {
+export interface TaskStep {
+	text: string;
+	/** 1-based position of this checkbox in the document. */
+	ordinal: number;
+}
+
+const MAX_TASKS = 16;
+
+/** Checkbox lines -> steps for the executable plan card. Each keeps its
+ *  document ordinal so check-off survives the user editing the list. */
+export function taskStepsWithOrdinals(md: string): { steps: TaskStep[]; truncated: number } {
+	// [ \t]* (not \s*) — \s crosses newlines, so a bare "- [ ]" line would
+	// swallow the following prose line as its task text.
+	const all = [...md.matchAll(/^[-*][ \t]*\[[ xX]?\][ \t]*(.+)$/gm)]
+		.map((m, i) => ({ text: m[1].replace(/^\d+[.)][ \t]*/, '').trim(), ordinal: i + 1 }))
+		.filter((s) => s.text);
+	return { steps: all.slice(0, MAX_TASKS), truncated: Math.max(0, all.length - MAX_TASKS) };
+}
+
+/** Convenience wrapper: just the step texts. */
+export function taskSteps(md: string): string[] {
+	return taskStepsWithOrdinals(md).steps.map((s) => s.text);
+}
+
+/** Rewrite tasks.md checkboxes for the given DOCUMENT ordinals (1-based). */
+export function checkOffTasks(md: string, doneOrdinals: Set<number>): string {
 	let i = 0;
-	return md.replace(/^([-*]\s*)\[[ xX]?\]/gm, (_m, pre) => {
+	return md.replace(/^([-*][ \t]*)\[[ xX]?\]/gm, (_m, pre) => {
 		i++;
-		return `${pre}[${doneIndices.has(i) ? 'x' : ' '}]`;
+		return `${pre}[${doneOrdinals.has(i) ? 'x' : ' '}]`;
 	});
 }

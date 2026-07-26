@@ -267,6 +267,13 @@
           "default": "",
           "description": "Model used for tab ghost-text completions (a small fast model is ideal, e.g. a local Qwen coder). \"provider:model\" or bare model. Empty = the main model."
         },
+        "openova.parallelRuns": {
+          "type": "number",
+          "default": 2,
+          "minimum": 2,
+          "maximum": 4,
+          "description": "How many attempts the Parallel chat mode runs at once. Each attempt gets its own git worktree; you keep one and the rest are discarded."
+        },
         "openova.budgetUSD": {
           "type": "number",
           "default": 0,

@@ -39,9 +39,11 @@ export function isCooling(r: Route, now = Date.now()): boolean {
 	return (cooldownUntil.get(routeKey(r)) ?? 0) > now;
 }
 
-/** Errors worth retrying / falling over on (vs. bad-request/auth mistakes). */
+/** Errors worth retrying / falling over on (vs. bad-request/auth mistakes).
+ *  Local servers (LM Studio, Ollama) reject requests while a model is still
+ *  loading — that is a wait-and-retry condition, not a misconfiguration. */
 export function isTransient(msg: string): boolean {
-	return /HTTP (408|409|429|5\d\d)|rate.?limit|overloaded|timed? ?out|timeout|fetch failed|network|ECONN|ENOTFOUND|EAI_AGAIN|aborted|socket/i.test(msg);
+	return /HTTP (408|409|429|5\d\d)|rate.?limit|overloaded|timed? ?out|timeout|fetch failed|network|ECONN|ENOTFOUND|EAI_AGAIN|aborted|socket|loading|not loaded|unloaded|busy|try again/i.test(msg);
 }
 
 /** Parse a "provider:model" or bare "model" fallback entry. */
@@ -80,13 +82,24 @@ export async function completeRouted(
 	onStream?: (fullText: string) => void,
 	completeFn: CompleteFn = complete
 ): Promise<RoutedResult> {
-	const all = [primary, ...fallbacks];
+	// Dedupe by provider:model — a fallback naming the same model as the
+	// primary would otherwise be retried immediately after the primary was
+	// cooled, hammering an endpoint that just rate-limited us.
+	const seen = new Set<string>();
+	const all = [primary, ...fallbacks].filter((r) => (seen.has(routeKey(r)) ? false : (seen.add(routeKey(r)), true)));
 	let candidates = all.filter((r) => !isCooling(r));
 	if (!candidates.length) { candidates = all; }
 	let lastErr = '';
+	let primaryErr = '';
+	let primaryTried = false;
 	for (let i = 0; i < candidates.length; i++) {
 		const route = candidates[i];
-		const attempts = route === primary ? 2 : 1;
+		// Re-check: a long earlier attempt may have pushed this route into
+		// cooldown since the list was built.
+		if (i > 0 && isCooling(route) && candidates.slice(i + 1).some((r) => !isCooling(r))) { continue; }
+		const isPrimary = route === primary;
+		const attempts = isPrimary ? 2 : 1;
+		if (isPrimary) { primaryTried = true; }
 		for (let a = 0; a < attempts; a++) {
 			try {
 				const text = await completeFn(
@@ -94,18 +107,24 @@ export async function completeRouted(
 					onStream
 				);
 				noteSuccess(route);
-				return {
-					text,
-					route,
-					note: route === primary ? undefined : `fallback ${routeKey(route)} (primary failed: ${lastErr.slice(0, 120)})`
-				};
+				const why = primaryTried
+					? `primary failed: ${primaryErr.slice(0, 120)}`
+					: 'primary is cooling down after an earlier failure';
+				return { text, route, note: isPrimary ? undefined : `fallback ${routeKey(route)} (${why})` };
 			} catch (e) {
 				lastErr = e instanceof Error ? e.message : String(e);
-				// Retry the primary once only for transient errors; a hard error
-				// (bad key, unknown model) goes straight to the next candidate.
+				if (isPrimary) { primaryErr = lastErr; }
+				// Retry the primary once, but ONLY for transient errors.
 				if (a + 1 < attempts && isTransient(lastErr)) {
 					await new Promise((r) => setTimeout(r, 1200));
 					continue;
+				}
+				// A non-transient primary failure (bad key, unknown model) is the
+				// user's configuration being wrong. Silently serving the turn from
+				// a different provider would hide that and bill the wrong account,
+				// so surface it instead of failing over.
+				if (isPrimary && !isTransient(lastErr)) {
+					throw new Error(`${lastErr} (${routeKey(route)}) — fix the model/key, or the fallback chain never engages for this kind of error.`);
 				}
 				noteFailure(route);
 				break;

@@ -19,6 +19,7 @@ const PRICES: [RegExp, Price][] = [
 	[/gpt-4o-mini/i, { in: 0.15, out: 0.6 }],
 	[/gpt-4o|gpt-4\.1(?!-mini|-nano)/i, { in: 2.5, out: 10 }],
 	[/gpt-4\.1-mini/i, { in: 0.4, out: 1.6 }],
+	[/gpt-4\.1-nano/i, { in: 0.1, out: 0.4 }],
 	[/gpt-5/i, { in: 1.25, out: 10 }],
 	[/o3-mini|o4-mini/i, { in: 1.1, out: 4.4 }],
 	[/gemini.*pro/i, { in: 1.25, out: 10 }],

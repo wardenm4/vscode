@@ -79,9 +79,11 @@ class MiniWebSocket {
 		});
 	}
 
-	/** Send one masked text frame (client frames MUST be masked per RFC 6455). */
-	send(text: string): void {
-		if (!this.socket) { return; }
+	/** Send one masked text frame (client frames MUST be masked per RFC 6455).
+	 *  Returns false when the socket is gone so callers can fail fast instead
+	 *  of waiting out a request timeout. */
+	send(text: string): boolean {
+		if (!this.socket || this.socket.destroyed) { return false; }
 		const payload = Buffer.from(text, 'utf8');
 		const mask = crypto.randomBytes(4);
 		let header: Buffer;
@@ -101,6 +103,7 @@ class MiniWebSocket {
 		const masked = Buffer.alloc(payload.length);
 		for (let i = 0; i < payload.length; i++) { masked[i] = payload[i] ^ mask[i % 4]; }
 		this.socket.write(Buffer.concat([header, mask, masked]));
+		return true;
 	}
 
 	private drain(): void {
@@ -137,11 +140,14 @@ class MiniWebSocket {
 				payload = un;
 			}
 			if (opcode === 0x9) {
-				// ping -> pong (masked, echo payload)
+				// ping -> pong (masked). Control frames cap at 125 bytes, so the
+				// echoed payload must be TRUNCATED, not just its length field —
+				// writing more bytes than the header declares desyncs the stream.
+				const echo = payload.subarray(0, 125);
 				const mask = crypto.randomBytes(4);
-				const masked = Buffer.alloc(payload.length);
-				for (let i = 0; i < payload.length; i++) { masked[i] = payload[i] ^ mask[i % 4]; }
-				this.socket?.write(Buffer.concat([Buffer.from([0x8a, 0x80 | Math.min(payload.length, 125)]), mask, masked]));
+				const masked = Buffer.alloc(echo.length);
+				for (let i = 0; i < echo.length; i++) { masked[i] = echo[i] ^ mask[i % 4]; }
+				this.socket?.write(Buffer.concat([Buffer.from([0x8a, 0x80 | echo.length]), mask, masked]));
 				continue;
 			}
 			if (opcode === 0x8) {
@@ -186,20 +192,41 @@ export function disposeAllCdp(): void {
 	for (const c of [...instances]) { c.dispose(); }
 }
 
+/** Delete profile dirs left behind by sessions that died hard (crash, kill). */
+export function sweepStaleProfiles(): void {
+	try {
+		for (const name of fs.readdirSync(os.tmpdir())) {
+			if (!name.startsWith('openova-cdp-')) { continue; }
+			const pid = Number(name.split('-')[2]);
+			if (pid === process.pid) { continue; }
+			try { fs.rmSync(path.join(os.tmpdir(), name), { recursive: true, force: true }); } catch { /* in use */ }
+		}
+	} catch { /* no temp access — skip */ }
+}
+
 export class CdpBrowser {
 	private proc: cp.ChildProcess | null = null;
 	private profileDir: string | null = null;
 	private ws = new MiniWebSocket();
 	private nextId = 1;
 	private readonly pending = new Map<number, { resolve: (v: unknown) => void; reject: (e: Error) => void }>();
+	private disposed = false;
 	alive = false;
 	currentUrl = 'about:blank';
 
+	/** Throw (and clean up) if dispose() landed while we were awaiting. */
+	private assertLive(): void {
+		if (this.disposed) {
+			this.dispose();
+			throw new Error('Browser session was disposed during launch.');
+		}
+	}
+
 	async launch(): Promise<void> {
-		instances.add(this);
 		const exe = findBrowser();
 		if (!exe) { throw new Error('No Chrome/Edge installation found for the interactive browser.'); }
 		const port = await freePort();
+		this.assertLive();
 		// UNIQUE profile per session: with a shared dir a second launch hands
 		// off to the existing Chrome and never exposes the new DevTools port.
 		const profile = path.join(os.tmpdir(), `openova-cdp-${process.pid}-${Date.now()}`);
@@ -212,6 +239,12 @@ export class CdpBrowser {
 			],
 			{ windowsHide: true }
 		);
+		// Register only once a process exists — otherwise a dispose() racing the
+		// awaits above would find nothing to kill and orphan this Chrome.
+		instances.add(this);
+		// spawn reports failures (EACCES, EMFILE, a mid-session Chrome update)
+		// asynchronously; without a listener Node throws them as uncaught.
+		this.proc.on('error', () => { this.alive = false; });
 		this.proc.on('exit', () => { this.alive = false; });
 		// Wait for the DevTools endpoint, then attach to the first page target.
 		let targets: { type: string; webSocketDebuggerUrl?: string }[] = [];
@@ -232,7 +265,14 @@ export class CdpBrowser {
 		const wsUrl = new URL(page.webSocketDebuggerUrl!);
 		this.ws.onMessage = (text) => {
 			try {
-				const msg = JSON.parse(text) as { id?: number; result?: unknown; error?: { message?: string } };
+				const msg = JSON.parse(text) as { id?: number; method?: string; result?: unknown; error?: { message?: string } };
+				// With Page.enable on, Chrome hands JS dialogs to US and blocks
+				// the renderer until they are answered — an unanswered alert()
+				// would wedge every later evaluate. Dismiss them automatically.
+				if (msg.method === 'Page.javascriptDialogOpening') {
+					void this.send('Page.handleJavaScriptDialog', { accept: true }, 5000).catch(() => { });
+					return;
+				}
 				if (msg.id !== undefined && this.pending.has(msg.id)) {
 					const p = this.pending.get(msg.id)!;
 					this.pending.delete(msg.id);
@@ -247,9 +287,11 @@ export class CdpBrowser {
 			this.pending.clear();
 		};
 		await this.ws.connect(wsUrl.hostname, Number(wsUrl.port), wsUrl.pathname + wsUrl.search);
+		this.assertLive();
 		this.alive = true;
 		await this.send('Page.enable', {});
 		await this.send('Runtime.enable', {});
+		this.assertLive();
 	}
 
 	send(method: string, params: Record<string, unknown>, timeoutMs = 15_000): Promise<unknown> {
@@ -263,7 +305,13 @@ export class CdpBrowser {
 				resolve: (v) => { clearTimeout(timer); resolve(v); },
 				reject: (e) => { clearTimeout(timer); reject(e); }
 			});
-			this.ws.send(JSON.stringify({ id, method, params }));
+			// A dead socket must fail now, not after the full timeout.
+			if (!this.ws.send(JSON.stringify({ id, method, params }))) {
+				const p = this.pending.get(id);
+				this.pending.delete(id);
+				p?.reject(new Error('Browser session is not connected.'));
+				return;
+			}
 		});
 	}
 
@@ -281,13 +329,25 @@ export class CdpBrowser {
 	}
 
 	async navigate(url: string): Promise<void> {
-		await this.send('Page.navigate', { url });
-		const deadline = Date.now() + 15_000;
+		// Mark the CURRENT document: a freshly committed document won't carry
+		// the marker. Without this, readyState 'complete' on the OLD page ends
+		// the wait immediately and we read the previous page's DOM and URL.
+		const marker = `__ovNav${Date.now().toString(36)}`;
+		await this.evaluate(`window.${marker} = 1`).catch(() => { });
+		const res = (await this.send('Page.navigate', { url })) as { errorText?: string };
+		if (res?.errorText) { throw new Error(`${res.errorText} (${url})`); }
+		const start = Date.now();
+		const deadline = start + 15_000;
 		for (; ;) {
 			try {
-				const state = await this.evaluate('document.readyState');
-				if (state === 'complete' || state === 'interactive') { break; }
-			} catch { /* navigating */ }
+				const [state, committed] = (await this.evaluate(
+					`[document.readyState, typeof window.${marker} === 'undefined']`
+				)) as [string, boolean];
+				// Same-document navigations (hash links) keep the marker, so after
+				// a short grace accept a settled readyState on its own.
+				const settled = state === 'complete' || state === 'interactive';
+				if (settled && (committed || Date.now() - start > 3000)) { break; }
+			} catch { /* mid-navigation: the JS context is being swapped */ }
 			if (Date.now() > deadline) { break; }
 			await new Promise((r) => setTimeout(r, 200));
 		}
@@ -303,23 +363,27 @@ export class CdpBrowser {
 	}
 
 	dispose(): void {
+		this.disposed = true;
 		instances.delete(this);
 		this.alive = false;
 		this.ws.close();
 		try {
 			if (process.platform === 'win32' && this.proc?.pid) {
-				cp.spawn('taskkill', ['/pid', String(this.proc.pid), '/T', '/F'], { windowsHide: true });
+				const killer = cp.spawn('taskkill', ['/pid', String(this.proc.pid), '/T', '/F'], { windowsHide: true });
+				killer.on('error', () => { /* taskkill missing — nothing else to try */ });
 			} else {
 				this.proc?.kill();
 			}
 		} catch { /* gone */ }
 		this.proc = null;
-		// Best-effort profile cleanup, delayed so the tree-kill lands first.
 		const dir = this.profileDir;
 		this.profileDir = null;
 		if (dir) {
+			// Try once inline (deactivate exits before any timer would fire),
+			// then again after the tree-kill has had time to release locks.
+			try { fs.rmSync(dir, { recursive: true, force: true }); } catch { /* still locked */ }
 			setTimeout(() => {
-				try { fs.rmSync(dir, { recursive: true, force: true }); } catch { /* locked — temp GC gets it */ }
+				try { fs.rmSync(dir, { recursive: true, force: true }); } catch { /* temp GC gets it */ }
 			}, 2000);
 		}
 	}
@@ -334,6 +398,9 @@ function finderJs(target: string): string {
 	return (
 		'(() => {' +
 		`const t = ${lit};` +
+		// An empty target would make querySelector throw and then text-match the
+		// first element with no visible text — i.e. click something at random.
+		'if (!t || !t.trim()) { return null; }' +
 		'let el = null;' +
 		'try { el = document.querySelector(t); } catch (e) { el = null; }' +
 		'if (!el) {' +
@@ -352,9 +419,13 @@ export function clickJs(target: string): string {
 		'(() => {' +
 		`const el = ${finderJs(target)};` +
 		'if (!el) { return { ok: false, error: "no element matched" }; }' +
-		'el.scrollIntoView({ block: "center" });' +
-		'el.click();' +
-		'return { ok: true, tag: el.tagName.toLowerCase(), text: (el.innerText || el.value || "").trim().slice(0, 80), href: el.href || null };' +
+		'if (el.scrollIntoView) { el.scrollIntoView({ block: "center" }); }' +
+		// click() lives on HTMLElement; SVG anchors and other non-HTML elements
+		// need a synthesized event instead.
+		'if (typeof el.click === "function") { el.click(); }' +
+		'else { el.dispatchEvent(new MouseEvent("click", { bubbles: true, cancelable: true, view: window })); }' +
+		// SVG anchors expose href as SVGAnimatedString, which serializes to {}.
+		'return { ok: true, tag: el.tagName.toLowerCase(), text: (el.innerText || el.value || "").trim().slice(0, 80), href: (typeof el.href === "string" ? el.href : null) };' +
 		'})()'
 	);
 }
@@ -367,11 +438,16 @@ export function typeJs(selector: string, text: string, pressEnter: boolean): str
 		'if (!el) { return { ok: false, error: "no element matched" }; }' +
 		'el.focus();' +
 		'if (el.isContentEditable) { el.textContent = ' + litText + '; }' +
-		'else {' +
-		'  const proto = el.tagName === "TEXTAREA" ? HTMLTextAreaElement.prototype : HTMLInputElement.prototype;' +
+		// The native value setter is receiver-checked: calling the input setter
+		// on a <select>/<div> throws "Illegal invocation". Only use it for the
+		// element types it belongs to, and reject anything with no value at all.
+		'else if (el instanceof HTMLInputElement || el instanceof HTMLTextAreaElement) {' +
+		'  const proto = el instanceof HTMLTextAreaElement ? HTMLTextAreaElement.prototype : HTMLInputElement.prototype;' +
 		'  const setter = Object.getOwnPropertyDescriptor(proto, "value");' +
 		'  if (setter && setter.set) { setter.set.call(el, ' + litText + '); } else { el.value = ' + litText + '; }' +
 		'}' +
+		'else if ("value" in el) { el.value = ' + litText + '; }' +
+		'else { return { ok: false, error: "element is not typable: <" + el.tagName.toLowerCase() + ">" }; }' +
 		'el.dispatchEvent(new Event("input", { bubbles: true }));' +
 		'el.dispatchEvent(new Event("change", { bubbles: true }));' +
 		(pressEnter

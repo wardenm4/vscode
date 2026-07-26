@@ -26,37 +26,54 @@ export interface Bm25Index {
 const K1 = 1.5;
 const B = 0.75;
 
-/** Code-aware tokenizer: splits camelCase / snake_case and keeps identifiers. */
-export function tokenize(text: string): string[] {
+/** Code-aware tokenizer: splits camelCase / snake_case and keeps identifiers.
+ *  Single characters are kept: dropping them made queries like "C#" or "R"
+ *  match nothing, and BM25's idf already discounts letters that appear
+ *  everywhere. */
+export function tokenize(text: string, minLen = 1): string[] {
 	const out: string[] = [];
 	for (const raw of text.split(/[^A-Za-z0-9_]+/)) {
 		if (!raw) { continue; }
 		const lower = raw.toLowerCase();
-		if (lower.length >= 2) { out.push(lower); }
+		if (lower.length >= minLen) { out.push(lower); }
 		// Split compound identifiers so "getUserName" matches "user name".
 		const parts = raw.split(/_+|(?<=[a-z0-9])(?=[A-Z])|(?<=[A-Z])(?=[A-Z][a-z])/);
 		if (parts.length > 1) {
 			for (const p of parts) {
 				const pl = p.toLowerCase();
-				if (pl.length >= 2 && pl !== lower) { out.push(pl); }
+				if (pl.length >= minLen && pl !== lower) { out.push(pl); }
 			}
 		}
 	}
 	return out;
 }
 
+/** Number of leading blank lines a trim() would remove. */
+function leadingBlanks(lines: string[]): number {
+	let n = 0;
+	while (n < lines.length && !lines[n].trim()) { n++; }
+	return n;
+}
+
 /** Split file content into overlapping line-window chunks. */
 export function chunkFile(file: string, content: string, windowLines = 40, overlap = 10): Chunk[] {
 	const lines = content.split(/\r\n|\r|\n/);
 	const chunks: Chunk[] = [];
+	// startLine must point at the FIRST line of the returned text, so leading
+	// blank lines dropped by trimming have to shift it — otherwise the agent
+	// reads or edits at an offset above the code it was shown.
 	if (lines.length <= windowLines) {
 		const text = content.trim();
-		if (text) { chunks.push({ file, startLine: 1, text: text.slice(0, 4000) }); }
+		if (text) { chunks.push({ file, startLine: 1 + leadingBlanks(lines), text: text.slice(0, 4000) }); }
 		return chunks;
 	}
-	for (let start = 0; start < lines.length; start += windowLines - overlap) {
-		const slice = lines.slice(start, start + windowLines).join('\n').trim();
-		if (slice) { chunks.push({ file, startLine: start + 1, text: slice.slice(0, 4000) }); }
+	const step = Math.max(1, windowLines - overlap);
+	for (let start = 0; start < lines.length; start += step) {
+		const window = lines.slice(start, start + windowLines);
+		const slice = window.join('\n').trim();
+		if (slice) {
+			chunks.push({ file, startLine: start + 1 + leadingBlanks(window), text: slice.slice(0, 4000) });
+		}
 		if (start + windowLines >= lines.length) { break; }
 	}
 	return chunks;

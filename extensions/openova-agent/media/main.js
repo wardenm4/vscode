@@ -263,7 +263,7 @@
 
 		const mode = document.createElement('select');
 		mode.className = 'mode';
-		for (const [v, label] of [['agent', 'Agent'], ['ask', 'Ask'], ['plan', 'Plan'], ['spec', 'Spec']]) {
+		for (const [v, label] of [['agent', 'Agent'], ['ask', 'Ask'], ['plan', 'Plan'], ['spec', 'Spec'], ['parallel', 'Parallel']]) {
 			const o = document.createElement('option');
 			o.value = v;
 			o.textContent = label;
@@ -1116,6 +1116,9 @@
 				if (m.plan) {
 					box.appendChild(renderPlan(m));
 				}
+				if (m.candidates && m.candidates.length) {
+					box.appendChild(renderCandidates(m));
+				}
 				if (m.pendingQuestion) {
 					box.appendChild(renderQuestion(m.pendingQuestion));
 				}
@@ -1353,6 +1356,62 @@
 		}
 		bar.appendChild(files);
 		return bar;
+	}
+
+	// Best-of-N: one card per attempt, with its diffstat and a Keep button.
+	function renderCandidates(m) {
+		const wrap = el('div', 'cands');
+		const settled = m.candidates.some((c) => c.status === 'applied' || c.status === 'discarded');
+		for (const c of m.candidates) {
+			const card = el('div', 'cand ' + c.status);
+			const head = el('div', 'cand-head');
+			head.appendChild(el('span', 'cand-label', c.label));
+			const meta = el('span', 'cand-meta');
+			const bits = [];
+			if (c.files.length) { bits.push(c.files.length + (c.files.length === 1 ? ' file' : ' files')); }
+			if (c.steps) { bits.push(c.steps + ' steps'); }
+			if (c.ms) { bits.push(fmtMs(c.ms)); }
+			meta.textContent = bits.join(' · ');
+			head.appendChild(meta);
+			const badge =
+				c.status === 'running' ? 'Running'
+					: c.status === 'error' ? 'Failed'
+						: c.status === 'applied' ? 'Kept'
+							: c.status === 'discarded' ? 'Discarded' : 'Ready';
+			head.appendChild(el('span', 'cand-badge ' + c.status, badge));
+			card.appendChild(head);
+			if (c.summary) {
+				const sum = el('div', 'cand-sum');
+				mdInline(sum, c.summary.slice(0, 600));
+				card.appendChild(sum);
+			}
+			if (c.files.length) {
+				const files = el('div', 'cand-files');
+				for (const f of c.files.slice(0, 12)) {
+					const row = el('div', 'cand-file');
+					row.appendChild(el('span', 'cand-fstat ' + f.status, f.status[0].toUpperCase()));
+					row.appendChild(el('span', 'cand-fname', f.path));
+					files.appendChild(row);
+				}
+				if (c.files.length > 12) {
+					files.appendChild(el('div', 'cand-more', '+' + (c.files.length - 12) + ' more'));
+				}
+				card.appendChild(files);
+			}
+			if (!settled && c.status === 'done' && c.files.length) {
+				const keep = el('button', 'cand-keep', 'Keep this one');
+				keep.onclick = () =>
+					vscode.postMessage({ type: 'keepCandidate', sessionId: active, msgId: m.id, candidateId: c.id });
+				card.appendChild(keep);
+			}
+			wrap.appendChild(card);
+		}
+		if (!settled && m.candidates.every((c) => c.status !== 'running')) {
+			const none = el('button', 'cand-none', 'Discard all');
+			none.onclick = () => vscode.postMessage({ type: 'keepCandidate', sessionId: active, msgId: m.id });
+			wrap.appendChild(none);
+		}
+		return wrap;
 	}
 
 	function renderPlan(m) {

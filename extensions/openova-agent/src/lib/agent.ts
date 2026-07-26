@@ -90,8 +90,10 @@ export interface AgentCallbacks {
 	onRequestStart?: (requestId: string) => void;
 	/** Drains user feedback left mid-run (Antigravity-style plan comments). */
 	getPendingFeedback?: () => string[];
-	/** Reports per-turn character counts so the host can estimate tokens/cost. */
-	onUsage?: (promptChars: number, completionChars: number) => void;
+	/** Reports per-turn character counts so the host can estimate tokens/cost.
+	 *  `model`/`provider` are the route that actually served the turn — with a
+	 *  fallback in play they differ from the configured primary. */
+	onUsage?: (promptChars: number, completionChars: number, model: string, provider: AIProvider) => void;
 	/** Live model output for the current turn (full text so far) — for streaming UI. */
 	onStreamDelta?: (fullText: string) => void;
 	/**
@@ -297,6 +299,7 @@ export async function runAgent(
 		}
 
 		let raw: string;
+		let servedBy: Route = { provider: config.provider, model: config.model };
 		const requestId = Math.random().toString(36).slice(2);
 		cb.onRequestStart?.(requestId);
 		try {
@@ -315,6 +318,7 @@ export async function runAgent(
 				(full) => cb.onStreamDelta?.(full)
 			);
 			raw = routed.text;
+			servedBy = routed.route;
 			if (routed.note) { cb.onThought(`Model router: ${routed.note}`); }
 		} catch (e) {
 			cb.onError(e instanceof Error ? e.message : String(e));
@@ -326,7 +330,9 @@ export async function runAgent(
 			SYSTEM.length +
 			(config.extraRules?.length ?? 0) +
 			transcript.reduce((n, m) => n + m.content.length, 0),
-			raw.length
+			raw.length,
+			servedBy.model,
+			servedBy.provider
 		);
 
 		// The stream may have finished with a full action buffered right as the user

@@ -2313,3 +2313,117 @@ body[data-mode='window'] .win-main > .composer textarea {
 	color: var(--vscode-descriptionForeground);
 	align-self: center;
 }
+
+/* best-of-N candidate cards */
+.cands {
+	display: flex;
+	flex-direction: column;
+	gap: 8px;
+	margin: 8px 0;
+}
+.cand {
+	border: 1px solid var(--ov-hair);
+	border-radius: 12px;
+	padding: 10px 12px;
+	background: var(--ov-card);
+}
+.cand.applied {
+	border-color: var(--ov-success);
+}
+.cand.discarded {
+	opacity: 0.55;
+}
+.cand-head {
+	display: flex;
+	align-items: center;
+	gap: 8px;
+}
+.cand-label {
+	font-weight: 600;
+	font-size: 12px;
+}
+.cand-meta {
+	font-family: var(--ov-mono);
+	font-size: 10.5px;
+	color: var(--vscode-descriptionForeground);
+	margin-left: auto;
+}
+.cand-badge {
+	font-size: 10px;
+	text-transform: uppercase;
+	letter-spacing: 0.04em;
+	padding: 2px 7px;
+	border-radius: 999px;
+	border: 1px solid var(--ov-hair);
+	color: var(--vscode-descriptionForeground);
+}
+.cand-badge.applied {
+	color: var(--ov-success);
+	border-color: var(--ov-success);
+}
+.cand-badge.error {
+	color: var(--ov-warn);
+	border-color: var(--ov-warn);
+}
+.cand-sum {
+	margin-top: 6px;
+	font-size: 12px;
+	line-height: 1.5;
+	color: var(--vscode-foreground);
+}
+.cand-files {
+	margin-top: 8px;
+	display: flex;
+	flex-direction: column;
+	gap: 2px;
+}
+.cand-file {
+	display: flex;
+	align-items: center;
+	gap: 7px;
+	font-family: var(--ov-mono);
+	font-size: 11px;
+}
+.cand-fstat {
+	width: 13px;
+	text-align: center;
+	color: var(--vscode-descriptionForeground);
+}
+.cand-fstat.added {
+	color: var(--ov-success);
+}
+.cand-fstat.deleted {
+	color: var(--ov-warn);
+}
+.cand-fname {
+	color: var(--vscode-descriptionForeground);
+	overflow: hidden;
+	text-overflow: ellipsis;
+	white-space: nowrap;
+}
+.cand-more {
+	font-family: var(--ov-mono);
+	font-size: 10.5px;
+	color: var(--vscode-descriptionForeground);
+	padding-left: 20px;
+}
+.cand-keep,
+.cand-none {
+	margin-top: 10px;
+	padding: 5px 12px;
+	border-radius: 8px;
+	font-size: 11.5px;
+	cursor: pointer;
+	border: 1px solid var(--ov-hair);
+	background: transparent;
+	color: var(--vscode-foreground);
+}
+.cand-keep {
+	background: var(--vscode-button-background);
+	color: var(--vscode-button-foreground);
+	border-color: transparent;
+}
+.cand-none {
+	align-self: flex-start;
+	margin-top: 0;
+}

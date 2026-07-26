@@ -23,11 +23,12 @@ import { collectRules, appendMemory } from './rules';
 import { discoverSkills, loadSkill, discoverSubagents, runHooks, hasHooks, listHooks } from './extensibility';
 import { browserScreenshot, browserSnapshot, resolveTarget, htmlToText, saveScreenshot } from './browser';
 import { CdpBrowser, clickJs, typeJs, disposeAllCdp } from './cdp';
+import { isGitRepo, addWorktree, removeWorktree, changedFiles, applyChanges } from './worktree';
 import { parseRouteSpec, type Route } from './lib/router';
 import { estTokens, estimateCost, fmtCost } from './lib/pricing';
 import {
 	specSlug, specDir, writeSpecFile, requirementsPrompt, designPrompt, tasksPrompt,
-	TRIVIAL_MARKER, docTitle, requirementTitles, taskSteps, checkOffTasks
+	TRIVIAL_MARKER, docTitle, requirementTitles, taskStepsWithOrdinals, checkOffTasks
 } from './spec';
 import * as cp from 'child_process';
 import * as os from 'os';
@@ -69,6 +70,19 @@ interface Plan {
 	file?: string;
 }
 
+/** One best-of-N attempt: an agent run in its own git worktree. */
+interface Candidate {
+	id: string;
+	label: string;
+	branch: string;
+	dir: string;
+	status: 'running' | 'done' | 'error' | 'applied' | 'discarded';
+	summary: string;
+	files: { path: string; status: 'added' | 'modified' | 'deleted' }[];
+	steps: number;
+	ms: number;
+}
+
 interface UiMessage {
 	id: string;
 	role: 'user' | 'assistant';
@@ -87,6 +101,8 @@ interface UiMessage {
 	at?: number;
 	/** Estimated tokens + cost for the run that produced this message. */
 	usage?: { tokens: number; cost: number };
+	/** Best-of-N attempts awaiting the user's pick. */
+	candidates?: Candidate[];
 }
 
 interface Session {
@@ -99,7 +115,7 @@ interface Session {
 interface QueuedItem {
 	id: string;
 	text: string;
-	mode: 'ask' | 'agent' | 'plan' | 'spec';
+	mode: 'ask' | 'agent' | 'plan' | 'spec' | 'parallel';
 }
 
 interface Automation {
@@ -200,10 +216,7 @@ export function activate(context: vscode.ExtensionContext): void {
 				void vscode.window.showErrorMessage('Openova: open a folder to create a worktree.');
 				return;
 			}
-			const isRepo = await new Promise<boolean>((resolve) => {
-				cp.exec('git rev-parse --git-dir', { cwd: root }, (err) => resolve(!err));
-			});
-			if (!isRepo) {
+			if (!(await isGitRepo(root))) {
 				void vscode.window.showErrorMessage('Openova: the current folder is not a git repository.');
 				return;
 			}
@@ -217,23 +230,16 @@ export function activate(context: vscode.ExtensionContext): void {
 				});
 			if (!name?.trim()) { return; }
 			const branch = name.trim();
-			const dest = path.join(path.dirname(root), `${path.basename(root)}-wt-${branch.replace(/[^\w.-]+/g, '-')}`);
-			const result = await new Promise<{ ok: boolean; out: string }>((resolve) => {
-				cp.exec(
-					`git worktree add -b "${branch}" "${dest}"`,
-					{ cwd: root, timeout: 30_000 },
-					(err, stdout, stderr) => resolve({ ok: !err, out: `${stdout}\n${stderr}`.trim() })
-				);
-			});
-			trace(`worktree: branch=${branch} dest=${dest} ok=${result.ok} ${result.out.slice(0, 120)}`);
+			const result = await addWorktree(root, branch);
+			trace(`worktree: branch=${branch} dest=${result.dir} ok=${result.ok} ${result.out.slice(0, 120)}`);
 			if (!result.ok) {
 				void vscode.window.showErrorMessage(`Openova: git worktree failed — ${result.out.slice(0, 300)}`);
 				return;
 			}
-			void vscode.window.showInformationMessage(`Openova: worktree "${branch}" created at ${dest}.`);
+			void vscode.window.showInformationMessage(`Openova: worktree "${branch}" created at ${result.dir}.`);
 			// The harness must not spawn extra windows during verification.
 			if (!isDevRunActive()) {
-				await vscode.commands.executeCommand('vscode.openFolder', vscode.Uri.file(dest), { forceNewWindow: true });
+				await vscode.commands.executeCommand('vscode.openFolder', vscode.Uri.file(result.dir), { forceNewWindow: true });
 			}
 		}),
 		// Restores the Agents window (incl. its floating OS window) across restarts.
@@ -420,7 +426,7 @@ export function activate(context: vscode.ExtensionContext): void {
 						return;
 					}
 					if (!req.text) { return; }
-					const mode = req.mode === 'ask' ? 'ask' : req.mode === 'plan' ? 'plan' : req.mode === 'spec' ? 'spec' : 'agent';
+					const mode = req.mode === 'ask' ? 'ask' : req.mode === 'plan' ? 'plan' : req.mode === 'spec' ? 'spec' : req.mode === 'parallel' ? 'parallel' : 'agent';
 					await provider.startRun(req.text, mode, req.context ?? []);
 					if (req.thenApprove) {
 						const ok = await provider.approveLastPlan();
@@ -839,7 +845,7 @@ class OpenovaChatViewProvider implements vscode.WebviewViewProvider {
 	/** Programmatic entry point (URI handler / commands / dev harness). */
 	async startRun(
 		text: string,
-		mode: 'ask' | 'agent' | 'plan' | 'spec',
+		mode: 'ask' | 'agent' | 'plan' | 'spec' | 'parallel',
 		contextPaths: string[] = []
 	): Promise<void> {
 		const sessionId = this.activeSession;
@@ -852,7 +858,7 @@ class OpenovaChatViewProvider implements vscode.WebviewViewProvider {
 	private async dispatch(
 		sessionId: string,
 		text: string,
-		mode: 'ask' | 'agent' | 'plan' | 'spec',
+		mode: 'ask' | 'agent' | 'plan' | 'spec' | 'parallel',
 		contextPaths: string[]
 	): Promise<void> {
 		let contextBlock = '';
@@ -888,6 +894,7 @@ class OpenovaChatViewProvider implements vscode.WebviewViewProvider {
 		}
 		else if (mode === 'plan') { await this.sendPlan(sessionId, full, text); }
 		else if (mode === 'spec') { await this.sendSpec(sessionId, full, text); }
+		else if (mode === 'parallel') { await this.sendParallel(sessionId, full, text); }
 		else { await this.sendAsk(sessionId, full, text); }
 	}
 
@@ -1096,7 +1103,7 @@ class OpenovaChatViewProvider implements vscode.WebviewViewProvider {
 			case 'send': {
 				const sessionId = String(msg.sessionId ?? this.activeSession ?? '');
 				const text = String(msg.text ?? '').trim();
-				const mode = msg.mode === 'ask' ? 'ask' : msg.mode === 'plan' ? 'plan' : msg.mode === 'spec' ? 'spec' : 'agent';
+				const mode = msg.mode === 'ask' ? 'ask' : msg.mode === 'plan' ? 'plan' : msg.mode === 'spec' ? 'spec' : msg.mode === 'parallel' ? 'parallel' : 'agent';
 				const contextPaths = Array.isArray(msg.context) ? (msg.context as string[]) : [];
 				if (!text || !this.session(sessionId)) { return; }
 				if (this.runs.get(sessionId)) {
@@ -1125,6 +1132,13 @@ class OpenovaChatViewProvider implements vscode.WebviewViewProvider {
 				});
 				break;
 			}
+			case 'keepCandidate':
+				await this.resolveCandidates(
+					String(msg.sessionId),
+					String(msg.msgId),
+					msg.candidateId ? String(msg.candidateId) : null
+				);
+				break;
 			case 'planEdit':
 				this.mutatePlan(String(msg.sessionId), String(msg.msgId), (p) => {
 					const st = p.steps.find((x) => x.id === String(msg.stepId));
@@ -1722,7 +1736,7 @@ class OpenovaChatViewProvider implements vscode.WebviewViewProvider {
 		};
 		const rel = (p: string): string => path.relative(root, p).replace(/\\/g, '/');
 
-		let handoff: { task: string; planMsgId?: string; tasksPath?: string } | null = null;
+		let handoff: { task: string; planMsgId?: string; tasksPath?: string; ordinals?: number[] } | null = null;
 		try {
 			if (/^\s*consolidate\b/i.test(displayText)) {
 				await this.specConsolidate(sessionId, root, gen);
@@ -1771,14 +1785,25 @@ class OpenovaChatViewProvider implements vscode.WebviewViewProvider {
 			if (this.runs.get(sessionId)?.stop) { return; }
 			const tasksPath = writeSpecFile(dir, 'tasks', tasksDoc);
 			trace(`spec tasks: ${rel(tasksPath)}`);
-			const steps = taskSteps(tasksDoc);
+			const parsedTasks = taskStepsWithOrdinals(tasksDoc);
+			const steps = parsedTasks.steps.map((t) => t.text);
 			if (!steps.length) {
 				this.specNote(sessionId, `Spec tasks were written to \`${rel(tasksPath)}\` but contained no checkable tasks — run them manually or retry.`);
 				return;
 			}
-			this.specNote(sessionId, `**Spec 3/3 — Tasks** written to \`${rel(tasksPath)}\` (${steps.length} tasks, requirement-traced). Approve to implement.`);
+			this.specNote(
+				sessionId,
+				`**Spec 3/3 — Tasks** written to \`${rel(tasksPath)}\` (${steps.length} tasks, requirement-traced). Approve to implement.` +
+				// Never let dropped tasks look like tasks the agent failed.
+				(parsedTasks.truncated
+					? `\n\nNote: the doc lists ${parsedTasks.truncated} more task(s) than this run will execute — they stay unchecked in tasks.md for a follow-up run.`
+					: '')
+			);
 			const tasksOk = await this.awaitStageApproval(sessionId, `Spec 3/3: Tasks — ${title}`, steps);
 			if (tasksOk === null) { this.specNote(sessionId, 'Spec cancelled at the tasks stage.'); return; }
+			// Track which document checkbox each approved step came from; the
+			// user may have edited/removed steps on the card.
+			const stepOrdinals = tasksOk.map((t) => parsedTasks.steps.find((p) => p.text === t)?.ordinal ?? 0);
 
 			// Executable plan card the run checks off.
 			const planMsg: UiMessage = {
@@ -1799,10 +1824,14 @@ class OpenovaChatViewProvider implements vscode.WebviewViewProvider {
 				task:
 					`Implement this spec, in order. After completing each task, call ` +
 					`<tool name="update_plan" step="N"></tool> with that task's number. ` +
-					`The full spec lives in ${rel(dir)}/ (requirements.md, design.md, tasks.md) — read those files when you need detail.\n\n` +
+					// Name the ACTUAL files: re-running a spec writes -2/-3 variants
+					// rather than clobbering, so hardcoding requirements.md would
+					// point the agent at a superseded document.
+					`The full spec lives in ${rel(dir)}/ — read ${rel(reqPath)}, ${rel(designPath)} and ${rel(tasksPath)} when you need detail.\n\n` +
 					`Tasks:\n${tasksOk.map((t, i) => `${i + 1}. ${t}`).join('\n')}`,
 				planMsgId: planMsg.id,
-				tasksPath
+				tasksPath,
+				ordinals: stepOrdinals
 			};
 		} catch (e) {
 			this.specNote(sessionId, `**Spec error:** ${e instanceof Error ? e.message : String(e)}`);
@@ -1820,8 +1849,13 @@ class OpenovaChatViewProvider implements vscode.WebviewViewProvider {
 			if (handoff.planMsgId && handoff.tasksPath) {
 				const plan = this.session(sessionId)?.messages.find((m) => m.id === handoff!.planMsgId)?.plan;
 				if (plan) {
+					// Map through the DOCUMENT ordinal of each step: the user may
+					// have deleted or reordered steps on the approval card, so a
+					// plan position is not a tasks.md checkbox position.
 					const done = new Set<number>();
-					plan.steps.forEach((st, i) => { if (st.done) { done.add(i + 1); } });
+					plan.steps.forEach((st, i) => {
+						if (st.done) { done.add(handoff!.ordinals?.[i] ?? i + 1); }
+					});
 					try {
 						const cur = fs.readFileSync(handoff.tasksPath, 'utf8');
 						fs.writeFileSync(handoff.tasksPath, checkOffTasks(cur, done), 'utf8');
@@ -1830,6 +1864,222 @@ class OpenovaChatViewProvider implements vscode.WebviewViewProvider {
 				}
 			}
 		}
+	}
+
+	// ---- best-of-N parallel runs --------------------------------------------
+
+	/**
+	 * Run the SAME task N times concurrently, each agent in its own git
+	 * worktree so the attempts never collide, then show the candidates side by
+	 * side. Applying one copies its changes onto the real checkout and feeds
+	 * the normal review/undo ledger; the worktrees are then cleaned up.
+	 */
+	private async sendParallel(sessionId: string, text: string, displayText = text): Promise<void> {
+		const root = vscode.workspace.workspaceFolders?.[0]?.uri.fsPath;
+		if (!root) {
+			void vscode.window.showErrorMessage('Openova: open a folder to run parallel agents.');
+			return;
+		}
+		if (!(await isGitRepo(root))) {
+			void vscode.window.showErrorMessage(
+				'Openova: parallel runs need a git repository (each attempt runs in its own worktree).'
+			);
+			return;
+		}
+		const cfg = vscode.workspace.getConfiguration('openova');
+		const count = Math.min(Math.max(cfg.get<number>('parallelRuns', 2), 2), 4);
+
+		const sess = this.session(sessionId)!;
+		const wasFirstTurn = sess.messages.length === 0;
+		if (wasFirstTurn) { sess.title = displayText.slice(0, 40); }
+		sess.updatedAt = Date.now();
+		const userMsg: UiMessage = { id: uid(), role: 'user', content: displayText, at: Date.now() };
+		const hostMsg: UiMessage = {
+			id: uid(),
+			role: 'assistant',
+			content: `Running ${count} attempts in parallel, each in its own git worktree.`,
+			at: Date.now(),
+			candidates: []
+		};
+		sess.messages.push(userMsg, hostMsg);
+		this.postSessions();
+		this.post({ type: 'running', sessionId, running: true });
+		const run: RunState = { stop: false, requestId: null };
+		this.runs.set(sessionId, run);
+
+		const stamp = Date.now().toString(36);
+		const s = this.settings();
+		const fallbacks = await this.fallbackRoutes();
+		const apiKey = await getApiKey(s.provider);
+		const envRules = cfg.get<string>('rules', '').trim();
+
+		const candidates: Candidate[] = [];
+		try {
+			// Create the worktrees up front so a git failure aborts cleanly.
+			for (let i = 0; i < count; i++) {
+				const branch = `openova/cand-${stamp}-${i + 1}`;
+				const wt = await addWorktree(root, branch);
+				if (!wt.ok) {
+					trace(`parallel worktree failed: ${wt.out.slice(0, 160)}`);
+					// Roll back the ones already made, then report.
+					for (const c of candidates) { await removeWorktree(root, c.dir, c.branch); }
+					this.mutateMsg(sessionId, hostMsg.id, (m) => {
+						m.content = `Could not create worktrees — ${wt.out.slice(0, 300)}`;
+						m.candidates = [];
+					});
+					this.postSessions();
+					return;
+				}
+				candidates.push({
+					id: uid(),
+					label: `Attempt ${i + 1}`,
+					branch,
+					dir: wt.dir,
+					status: 'running',
+					summary: '',
+					files: [],
+					steps: 0,
+					ms: 0
+				});
+			}
+			this.mutateMsg(sessionId, hostMsg.id, (m) => { m.candidates = candidates.map((c) => ({ ...c })); });
+			this.postSessions();
+			trace(`parallel start: ${count} worktrees`);
+
+			const syncCards = (): void => {
+				this.mutateMsg(sessionId, hostMsg.id, (m) => { m.candidates = candidates.map((c) => ({ ...c })); });
+				this.postSessions();
+			};
+
+			await Promise.all(
+				candidates.map(async (cand, i) => {
+					// Stagger the starts: a local single-instance server (LM Studio,
+					// Ollama) rejects the second request while it is still loading
+					// the model, which would kill that attempt before step one.
+					if (i > 0) { await new Promise((r) => setTimeout(r, i * 1500)); }
+					const startedAt = Date.now();
+					const host: ToolHost = { root: cand.dir, sessionAllowed: this.sessionAllowed };
+					const tools = createTools(host);
+					// Per-candidate rules come from the candidate's own checkout.
+					const projectRules = collectRules(cand.dir, []).inject;
+					try {
+						await runAgent(
+							text,
+							tools,
+							{
+								provider: s.provider,
+								baseURL: s.baseUrl || undefined,
+								apiKey,
+								model: s.model,
+								maxTokens: 8192,
+								extraRules: [envRules, projectRules].filter(Boolean).join('\n\n') || undefined,
+								fallbacks
+							},
+							{
+								onThought: () => { },
+								onAction: () => {
+									cand.steps++;
+									cand.ms = Date.now() - startedAt;
+									syncCards();
+								},
+								onObservation: () => { },
+								onFinish: (summary) => {
+									cand.summary = summary;
+									cand.status = 'done';
+								},
+								onError: (e) => {
+									cand.summary = cand.summary || `Error: ${e}`;
+									cand.status = 'error';
+								},
+								shouldStop: () => this.runs.get(sessionId)?.stop ?? true
+							},
+							30,
+							// depth 1: candidates may not spawn their own subagents
+							1
+						);
+					} catch (e) {
+						cand.status = 'error';
+						cand.summary = e instanceof Error ? e.message : String(e);
+					}
+					cand.ms = Date.now() - startedAt;
+					if (cand.status === 'running') { cand.status = 'done'; }
+					cand.files = await changedFiles(cand.dir);
+					trace(
+						`parallel ${cand.label}: ${cand.status} files=${cand.files.length} steps=${cand.steps}` +
+						(cand.status === 'error' ? ` err=${cand.summary.slice(0, 200).replace(/\n/g, ' ')}` : '')
+					);
+					syncCards();
+				})
+			);
+
+			const anyFiles = candidates.some((c) => c.files.length);
+			this.mutateMsg(sessionId, hostMsg.id, (m) => {
+				m.content = anyFiles
+					? `${count} attempts finished. Review them below and keep one — the rest are discarded.`
+					: `${count} attempts finished but none changed any files.`;
+				m.candidates = candidates.map((c) => ({ ...c }));
+			});
+			this.postSessions();
+			// Headless harness: pick the richest attempt so the apply + cleanup
+			// path is exercised (a user run always waits for a real choice).
+			if (isDevRunActive()) {
+				const best = [...candidates]
+					.filter((c) => c.status === 'done' && c.files.length)
+					.sort((a, b) => b.files.length - a.files.length)[0];
+				trace(`devParallel auto-keep: ${best?.label ?? 'none'}`);
+				await this.resolveCandidates(sessionId, hostMsg.id, best?.id ?? null);
+			}
+		} finally {
+			this.post({ type: 'running', sessionId, running: false });
+			this.runs.delete(sessionId);
+			this.finishRun(sessionId, wasFirstTurn);
+		}
+	}
+
+	/** Keep one candidate (copy its changes onto the real checkout) or none. */
+	private async resolveCandidates(sessionId: string, msgId: string, keepId: string | null): Promise<void> {
+		const root = vscode.workspace.workspaceFolders?.[0]?.uri.fsPath;
+		const msg = this.session(sessionId)?.messages.find((m) => m.id === msgId);
+		const list = msg?.candidates;
+		if (!root || !msg || !list?.length) { return; }
+		const keep = keepId ? list.find((c) => c.id === keepId) : null;
+		if (keepId && !keep) { return; }
+
+		if (keep) {
+			const applied = applyChanges(keep.dir, root, keep.files);
+			// Feed the normal review bar / undo ledger so applied changes get
+			// the same diff review as any agent run.
+			msg.writes = applied.map((a) => {
+				const d = lineDiff(a.before ?? '', a.after);
+				return {
+					path: a.path,
+					fullPath: a.fullPath,
+					added: d.added,
+					removed: d.removed,
+					before: a.before,
+					isNew: !a.existed
+				};
+			});
+			msg.reviewDismissed = false;
+			msg.content = `Kept ${keep.label} — ${applied.length} file(s) applied to the workspace.`;
+			trace(`parallel apply: ${keep.label} files=${applied.length}`);
+			void vscode.window.showInformationMessage(
+				`Openova: applied ${keep.label} (${applied.length} file(s)). Review or undo from the changes bar.`
+			);
+		} else {
+			msg.content = 'Discarded every attempt — the workspace is unchanged.';
+			trace('parallel discard all');
+		}
+		for (const c of list) {
+			c.status = keep && c.id === keep.id ? 'applied' : 'discarded';
+		}
+		this.persist();
+		this.postSessions();
+		// Clean up every worktree, including the winner's (its changes now live
+		// in the real checkout).
+		for (const c of list) { await removeWorktree(root, c.dir, c.branch); }
+		trace('parallel cleanup done');
+		this.postSessions();
 	}
 
 	/** "consolidate": refresh the latest spec's tasks.md against reality. */
@@ -2072,6 +2322,9 @@ class OpenovaChatViewProvider implements vscode.WebviewViewProvider {
 			this.post({ type: 'openBrowser', url: resolved });
 			try {
 				if (!this.cdp?.alive) {
+					// A dead session still owns a Chrome process + profile dir —
+					// dispose it before replacing, or it leaks for the session.
+					this.cdp?.dispose();
 					this.cdp = new CdpBrowser();
 					await this.cdp.launch();
 				}
@@ -2310,7 +2563,6 @@ class OpenovaChatViewProvider implements vscode.WebviewViewProvider {
 
 		// Cost meter: token estimates accumulate per run; the budget warning
 		// fires once per run when the session's estimated spend crosses it.
-		const localProvider = providerInfo(s.provider).local;
 		const budgetUSD = vscode.workspace.getConfiguration('openova').get<number>('budgetUSD', 0);
 		let runTokens = 0;
 		let runCost = 0;
@@ -2332,11 +2584,14 @@ class OpenovaChatViewProvider implements vscode.WebviewViewProvider {
 					fallbacks: await this.fallbackRoutes()
 				},
 				{
-					onUsage: (promptChars, completionChars) => {
+					onUsage: (promptChars, completionChars, servedModel, servedProvider) => {
 						const inTok = estTokens(promptChars);
 						const outTok = estTokens(completionChars);
 						runTokens += inTok + outTok;
-						runCost += estimateCost(s.model, inTok, outTok, localProvider);
+						// Price the model that ACTUALLY served the turn — with a
+						// fallback in play it isn't the configured primary (and a
+						// local primary must not make paid fallbacks read as free).
+						runCost += estimateCost(servedModel, inTok, outTok, providerInfo(servedProvider).local);
 						trace(`usage: tokens=${runTokens} cost=${runCost.toFixed(5)}`);
 						this.mutateMsg(sessionId, agentMsg.id, (m) => {
 							m.usage = { tokens: runTokens, cost: runCost };

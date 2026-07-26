@@ -13,7 +13,7 @@ import * as cp from 'child_process';
 import type { AgentTools } from './lib/agent';
 import { classifyCommand } from './lib/commandGate';
 import { isDevRunActive } from './devMode';
-import { searchCodebase } from './codebaseIndex';
+import { searchCodebase, invalidateIndex } from './codebaseIndex';
 
 const EXCLUDE = '{**/node_modules/**,**/.git/**,**/out/**,**/dist/**,**/build/**,**/.openova/**}';
 
@@ -300,6 +300,9 @@ export function createTools(host: ToolHost): AgentTools {
 				existed = false;
 			}
 			await vscode.workspace.fs.writeFile(uri, new TextEncoder().encode(content));
+			// The search index must not serve pre-write content back to the
+			// agent that just wrote the file.
+			invalidateIndex(host.root);
 			host.onWrite?.({ relPath: rel, fullPath: full, existed, before, content });
 			// Surface any known problems for this file so the model can self-correct.
 			const probs = vscode.languages
@@ -334,6 +337,8 @@ export function createTools(host: ToolHost): AgentTools {
 				const ok = await approveCommand(host, cmd, prompt);
 				if (!ok) { return { output: `(declined: ${prompt} approval)`, exitCode: null, denied: true }; }
 			}
+			// Commands create/modify files too (installs, generators, builds).
+			invalidateIndex(host.root);
 			if (background) {
 				const job = startBgJob(cmd, host.root);
 				return {
